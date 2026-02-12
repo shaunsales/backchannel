@@ -2,7 +2,7 @@ from fasthtml.common import *
 from app.config import DASHBOARD_PORT
 from app.db import init_db
 from app.components.layout import head_tags
-from app.routes import dashboard
+from app.routes import dashboard, services, sync, auth
 
 hdrs = head_tags()
 app, rt = fast_app(hdrs=hdrs, live=True)
@@ -10,6 +10,9 @@ app, rt = fast_app(hdrs=hdrs, live=True)
 init_db()
 
 dashboard.register(rt)
+services.register(rt)
+sync.register(rt)
+auth.register(rt)
 
 
 if __name__ == "__main__":

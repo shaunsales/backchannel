@@ -125,13 +125,13 @@ implementing any individual service.
 
 ### Tasks
 
-- [ ] **2.1. Create `app/pullers/base.py`**
+- [x] **2.1. Create `app/pullers/base.py`**
   - `PullResult` dataclass: `items` (list of dicts), `new_cursor` (str),
     `items_new` (int), `items_updated` (int).
   - `BasePuller` ABC with methods: `test_connection()`, `pull(cursor, since)`,
     `normalize(raw_item)`.
 
-- [ ] **2.2. Create `app/services/manager.py`**
+- [x] **2.2. Create `app/services/manager.py`**
   - `connect(service_id, credentials)`: validate and store credentials,
     set status to `connected`.
   - `disconnect(service_id)`: clear credentials, set status to `disconnected`.
@@ -140,30 +140,30 @@ implementing any individual service.
   - `status(service_id)`: return current service row.
   - `get_puller(service_id)`: factory that returns the correct puller instance.
 
-- [ ] **2.3. Create `app/routes/services.py`**
+- [x] **2.3. Create `app/routes/services.py`**
   - `GET /services/{service_id}`: service detail page with connection
     section, config section, sync section (placeholder forms for now).
   - `GET /services/{service_id}/card`: returns just the service card HTML
     fragment for HTMX polling.
 
-- [ ] **2.4. Create `app/routes/sync.py`**
+- [x] **2.4. Create `app/routes/sync.py`**
   - `POST /sync/{service_id}`: trigger a sync for one service. Creates a
     sync_run record, calls the puller, upserts items, updates cursor,
     finalises the run. Returns the updated service card.
   - `POST /sync/all`: loop through all enabled+connected services and sync
     each. Return a status banner.
 
-- [ ] **2.5. Create `app/routes/auth.py` — stub**
+- [x] **2.5. Create `app/routes/auth.py` — stub**
   Placeholder route handlers for each service's auth flow. Each returns a
   "not yet implemented" message. Will be filled in as each service is built.
 
-- [ ] **2.6. Mount all new routes in `main.py`**
+- [x] **2.6. Mount all new routes in `main.py`**
 
 ### Done when
-- [ ] Service detail pages render at `/services/notion`, etc.
-- [ ] HTMX card polling works (card refreshes every 30s)
-- [ ] `POST /sync/{service_id}` returns an appropriate error for unconnected services
-- [ ] BasePuller and PullResult are importable and type-correct
+- [x] Service detail pages render at `/services/notion`, etc.
+- [x] HTMX card polling works (card refreshes every 30s)
+- [x] `POST /sync/{service_id}` returns an appropriate error for unconnected services
+- [x] BasePuller and PullResult are importable and type-correct
 
 
 ---
