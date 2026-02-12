@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+
+# Data
+data/backchannel.db
+data/backchannel.db-wal
+data/backchannel.db-shm
+data/sessions/
+data/tokens/
+data/logs/
+
+# WhatsApp bridge
+whatsapp-bridge/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
