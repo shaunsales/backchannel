@@ -23,6 +23,9 @@ data/logs/
 # WhatsApp bridge
 whatsapp-bridge/
 
+# FastHTML
+.sesskey
+
 # macOS
 .DS_Store
 

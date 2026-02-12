@@ -15,43 +15,43 @@ skeleton in place. Nothing runs yet, but everything is wired to build and start.
 
 ### Tasks
 
-- [ ] **0.1. Create project directory structure**
+- [x] **0.1. Create project directory structure**
   Create every directory from the project structure in PLAN.md:
   `app/`, `app/components/`, `app/routes/`, `app/pullers/`, `app/services/`,
   `data/`, `data/sessions/`, `data/tokens/`, `data/logs/`, `scripts/`.
   Add `__init__.py` files where needed.
 
-- [ ] **0.2. Create `.env.example`**
+- [x] **0.2. Create `.env.example`**
   List every environment variable from PLAN.md with placeholder values and
   comments. Sections: General, Notion, Gmail, Telegram, ProtonMail, WhatsApp.
 
-- [ ] **0.3. Create `requirements.txt`**
+- [x] **0.3. Create `requirements.txt`**
   Pin all Python dependencies from PLAN.md with compatible versions:
   `python-fasthtml`, `notion-client`, `google-api-python-client`,
   `google-auth-oauthlib`, `google-auth-httplib2`, `telethon`, `imapclient`,
   `mail-parser`, `python-dotenv`, `qrcode[pil]`.
 
-- [ ] **0.4. Set up Python virtual environment and install deps**
+- [x] **0.4. Set up Python virtual environment and install deps**
   Create venv, install from requirements.txt, confirm all imports resolve.
 
-- [ ] **0.5. Create `app/config.py`**
+- [x] **0.5. Create `app/config.py`**
   Load `.env` with python-dotenv. Expose a settings object or module-level
   constants for every env var. Include sensible defaults (port 8787,
   database path `data/backchannel.db`, etc.).
 
-- [ ] **0.6. Create `app/main.py` — minimal FastHTML app**
+- [x] **0.6. Create `app/main.py` — minimal FastHTML app**
   Import FastHTML, create the app instance, mount a single `GET /` that
   returns a plain "Backchannel is running" response. Confirm it starts on
   port 8787.
 
-- [ ] **0.7. Verify Tailwind CSS 4 + DaisyUI 4 via CDN**
+- [x] **0.7. Verify Tailwind CSS 4 + DaisyUI 4 via CDN**
   Add CDN links to the HTML head. Render a test page with a DaisyUI card
   and a Tailwind utility class. Confirm styling works in the browser.
 
 ### Done when
-- [ ] `python app/main.py` starts a server on localhost:8787
-- [ ] The test page renders with correct Tailwind/DaisyUI styling
-- [ ] All Python imports succeed without errors
+- [x] `python app/main.py` starts a server on localhost:8787
+- [x] The test page renders with correct Tailwind/DaisyUI styling
+- [x] All Python imports succeed without errors
 
 
 ---
