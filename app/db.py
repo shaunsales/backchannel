@@ -104,6 +104,7 @@ CREATE TRIGGER IF NOT EXISTS items_au AFTER UPDATE ON items BEGIN
     INSERT INTO items_fts(rowid, subject, body_plain, sender, conversation)
     VALUES (new.id, new.subject, new.body_plain, new.sender, new.conversation);
 END;
+
 """
 
 SEED_SQL = """

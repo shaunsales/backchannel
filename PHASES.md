@@ -309,35 +309,94 @@ but using raw IMAP instead of a REST API.
 ## Phase 6 — Notion
 
 API key auth is simple, but recursive block fetching and database row handling
-add complexity.
+add complexity. Notion pages are stored as **documents** (markdown in SQLite)
+rather than items, since they are mutable documents that change over time.
+
+### Data Model — `documents` table
+
+Notion pages are stored in a dedicated `documents` table in SQLite (not on
+disk). Each document holds the full markdown content directly in the DB,
+with content-hash dedup and version tracking:
+
+```sql
+documents
+├── id              (auto PK)
+├── service_id      (notion)
+├── source_id       (Notion page ID)
+├── title           (page title)
+├── body_markdown   (full page content as markdown, stored in DB)
+├── content_hash    (SHA-256 of body_markdown — skip writes if unchanged)
+├── version         (incremented on each real content change)
+├── metadata        (JSON — Notion properties, tags, parent, etc.)
+├── source_ts       (last_edited_time from Notion)
+├── fetched_at
+├── sync_run_id
+└── UNIQUE(service_id, source_id)
+```
+
+**FTS5 index** on `title` and `body_markdown` for full-text search.
+
+**`document_versions` table** for history:
+
+```sql
+document_versions
+├── id              (auto PK)
+├── document_id     (FK → documents)
+├── version         (version number at time of snapshot)
+├── body_markdown   (content at this version)
+├── content_hash
+├── source_ts
+├── created_at
+```
+
+**Sync logic:**
+1. Pull page content from Notion → convert blocks to markdown
+2. Hash the content → compare to `content_hash` in `documents`
+3. If changed: insert snapshot into `document_versions`, update `documents`
+   row with new content/hash/version
+4. If unchanged: skip (no write, no version bump)
 
 ### Tasks
 
-- [ ] **6.1. Add auth form for Notion in `auth_forms.py`**
+- [ ] **6.1. Add `documents` and `document_versions` tables to `app/db.py`**
+  Create the schema as described above with FTS5 index and triggers.
+
+- [ ] **6.2. Add auth form for Notion in `auth_forms.py`**
   - API token input field with a "Save & Test" button.
 
-- [ ] **6.2. Implement `app/routes/auth.py` — Notion flow**
+- [ ] **6.3. Implement `app/routes/auth.py` — Notion flow**
   - `POST /auth/notion/connect`: store the token, test with a search API
     call, set status.
 
-- [ ] **6.3. Implement `app/pullers/notion.py`**
+- [ ] **6.4. Implement `app/pullers/notion.py`**
   - `test_connection()`: call the search endpoint with the stored token.
   - `pull(cursor, since)`: search for pages and databases. If cursor exists,
     filter by `last_edited_time > cursor`. For pages, recursively fetch
-    block children up to configurable `max_depth` (default 5). For databases,
-    query all rows. Use `collect_paginated_api` for pagination. Return
-    PullResult.
-  - `normalize(raw_page)`: pages become `item_type: page` with title as
-    subject and block text concatenated as body_plain. Database rows become
-    `item_type: db_row` with properties in metadata. sender_is_me is always 1.
+    block children up to configurable `max_depth` (default 5). Convert
+    blocks to markdown. Hash content and compare to stored hash — only
+    create a new version if changed. For databases, query all rows.
+    Use `collect_paginated_api` for pagination. Return PullResult.
+  - `normalize(raw_page)`: convert Notion blocks to clean markdown. Store
+    as a document (not an item). Database rows become `item_type: db_row`
+    in the items table with properties in metadata.
 
-- [ ] **6.4. Test initial and incremental sync**
-  Connect Notion, sync, verify pages and db_rows in items. Modify a page,
-  re-sync, verify only changed items are fetched.
+- [ ] **6.5. Add document browsing to the dashboard**
+  - `GET /docs`: list all documents with title, service, version, last
+    updated. Searchable via FTS.
+  - `GET /docs/{id}`: render the markdown content in the dashboard.
+  - `GET /docs/{id}/history`: show version history with diffs.
+
+- [ ] **6.6. Test initial and incremental sync**
+  Connect Notion, sync, verify pages land in `documents` with correct
+  markdown content. Modify a page, re-sync, verify a new version is
+  created and the old version is preserved in `document_versions`.
 
 ### Done when
 - [ ] Notion connects via API key from the dashboard
-- [ ] Pages and database rows sync with recursive block content
+- [ ] Pages sync into `documents` table with markdown content in SQLite
+- [ ] Content-hash dedup prevents unnecessary version bumps
+- [ ] Version history is preserved in `document_versions`
+- [ ] Documents are browsable in the dashboard with rendered markdown
 - [ ] Incremental sync by last_edited_time works correctly
 
 
@@ -400,10 +459,10 @@ simplest puller (read from the bridge's SQLite DB).
 ---
 
 
-## Phase 8 — Sync History & Full-Text Search
+## Phase 8 — Sync History, Full-Text Search & API
 
-Build the history page, wire up FTS5 search, and ensure the sync table
-supports filtering and pagination.
+Build the history page, wire up FTS5 search, and add a JSON/Markdown API
+layer for programmatic access (e.g. AI agent ingestion).
 
 ### Tasks
 
@@ -417,16 +476,50 @@ supports filtering and pagination.
   pagination controls.
 
 - [ ] **8.3. Verify FTS5 triggers**
-  Insert, update, and delete items. Confirm the `items_fts` virtual table
-  stays in sync via the triggers created in Phase 1.
+  Insert, update, and delete items and documents. Confirm the FTS virtual
+  tables stay in sync via the triggers created in earlier phases.
 
-- [ ] **8.4. Add a search endpoint (optional stretch)**
-  `GET /search?q=...` that queries `items_fts` and returns matching items.
-  Useful for verifying data quality and for future AI agent integration.
+- [ ] **8.4. Create `app/routes/api.py` — JSON + Markdown API**
+  All endpoints return JSON by default. Add `?format=markdown` query param
+  for markdown output (ideal for AI agent consumption).
+
+  **Items (messages/emails):**
+  - `GET /api/items` — list items with filters: `service`, `type`, `sender`,
+    `since`, `until`, `q` (FTS search), `limit`, `offset`.
+  - `GET /api/items/{id}` — single item with full body.
+  - `GET /api/items/search?q=...` — full-text search across all items.
+  - `GET /api/services` — all services with status + item/doc counts.
+  - `GET /api/services/{id}/items` — items for a specific service.
+  - `GET /api/sync-runs` — recent sync history.
+  - `GET /api/stats` — summary stats (counts by service, date range, etc.).
+
+  **Documents (Notion pages):**
+  - `GET /api/docs` — list all documents with metadata (title, version,
+    last updated). Searchable via `?q=` FTS param.
+  - `GET /api/docs/{id}` — latest document content (JSON with metadata,
+    or raw markdown with `?format=markdown`).
+  - `GET /api/docs/{id}/history` — list of versions with dates and hashes.
+  - `GET /api/docs/{id}/version/{version}` — specific historical version.
+
+  **Markdown format** groups items by conversation and reads naturally:
+  ```
+  ## Telegram — Family Group
+  **Alice** (2026-02-12 18:30):
+  Hey, are we still on for dinner?
+  ---
+  **Bob** (2026-02-12 18:32):
+  Yes! 7pm at the usual place.
+  ```
+
+- [ ] **8.5. Mount API routes in `main.py`**
 
 ### Done when
 - [ ] `/history` renders a paginated, filterable sync run table
-- [ ] FTS5 stays in sync with items on insert/update/delete
+- [ ] FTS5 stays in sync with items and documents on insert/update/delete
+- [ ] `/api/items` returns JSON with filtering and pagination
+- [ ] `/api/docs` returns JSON with document metadata
+- [ ] `/api/docs/{id}` returns document content in JSON or markdown
+- [ ] `/api/items?format=markdown` returns conversation-grouped markdown
 
 
 ---
