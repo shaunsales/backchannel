@@ -64,7 +64,7 @@ page with placeholder service cards.
 
 ### Tasks
 
-- [ ] **1.1. Create `app/db.py` — database layer**
+- [x] **1.1. Create `app/db.py` — database layer**
   - `get_db()`: returns a sqlite3 connection with WAL mode, foreign keys on,
     and row factory set to `sqlite3.Row`.
   - `init_db()`: creates all tables if they don't exist (services, sync_runs,
@@ -72,47 +72,47 @@ page with placeholder service cards.
   - Schema must match PLAN.md exactly: all fields, indexes, FTS5 virtual
     table, and triggers for FTS sync.
 
-- [ ] **1.2. Write and verify seed data**
+- [x] **1.2. Write and verify seed data**
   Insert the 5 services (notion, gmail, telegram, protonmail, whatsapp) with
   correct display names, auth types, and default status `disconnected`.
   Use `INSERT OR IGNORE` so re-running init is safe.
 
-- [ ] **1.3. Create `app/components/layout.py`**
+- [x] **1.3. Create `app/components/layout.py`**
   - `page(*children)`: full HTML document with head (CDN links, meta tags,
     HTMX script), nav bar, main content area, and footer.
   - `nav_bar()`: Backchannel branding/logo, links to Dashboard and History.
 
-- [ ] **1.4. Create `app/components/service_card.py`**
+- [x] **1.4. Create `app/components/service_card.py`**
   - `service_card(service)`: DaisyUI card showing service icon/name, status
     badge (colour-coded), last sync time, item count, duration, and action
     button (Connect / Sync Now). Wire the `hx-get` attribute pointing to
     `/services/{id}/card` for polling.
 
-- [ ] **1.5. Create `app/components/sync_table.py`**
+- [x] **1.5. Create `app/components/sync_table.py`**
   - `sync_history_table(rows)`: HTML table of sync run records. Columns:
     service, run type, status, items fetched, duration, timestamp.
 
-- [ ] **1.6. Create `app/components/alerts.py`**
+- [x] **1.6. Create `app/components/alerts.py`**
   - `success(msg)`, `error(msg)`, `warning(msg)`: DaisyUI alert banners
     suitable for HTMX swap targets.
 
-- [ ] **1.7. Create `app/routes/dashboard.py` — `GET /`**
+- [x] **1.7. Create `app/routes/dashboard.py` — `GET /`**
   Query services table for all 5 rows. Query sync_runs for the last 10.
   Render the landing page: stats bar, service card grid, recent activity
   table. All cards show `disconnected` at this stage.
 
-- [ ] **1.8. Mount routes in `app/main.py`**
+- [x] **1.8. Mount routes in `app/main.py`**
   Import and register the dashboard route. Ensure `init_db()` runs on
   startup.
 
-- [ ] **1.9. Visual check**
+- [x] **1.9. Visual check**
   Open localhost:8787 in a browser. Confirm the layout, nav bar, 5 service
   cards, and empty sync table all render correctly with DaisyUI styling.
 
 ### Done when
-- [ ] `data/backchannel.db` is created on first run with all tables and seed data
-- [ ] Dashboard at `/` renders 5 disconnected service cards and an empty sync table
-- [ ] Layout looks clean with Tailwind/DaisyUI
+- [x] `data/backchannel.db` is created on first run with all tables and seed data
+- [x] Dashboard at `/` renders 5 disconnected service cards and an empty sync table
+- [x] Layout looks clean with Tailwind/DaisyUI
 
 
 ---
