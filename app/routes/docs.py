@@ -6,36 +6,29 @@ from app.components.layout import page
 def register(rt):
 
     @rt("/docs")
-    def get(q: str = "", show_hidden: str = ""):
+    def get(q: str = ""):
         db = get_db()
-        include_hidden = show_hidden == "1"
-        hidden_filter = "" if include_hidden else "AND d.hidden = 0"
-        hidden_filter_simple = "" if include_hidden else "AND hidden = 0"
 
         if q:
-            rows = db.execute(f"""
-                SELECT d.id, d.title, d.version, d.source_ts, d.fetched_at, d.service_id, d.hidden,
+            rows = db.execute("""
+                SELECT d.id, d.title, d.version, d.source_ts, d.fetched_at,
+                       d.service_id, d.hidden, d.body_markdown,
                        snippet(documents_fts, 1, '<mark>', '</mark>', '...', 40) as snippet
                 FROM documents_fts
                 JOIN documents d ON d.id = documents_fts.rowid
-                WHERE documents_fts MATCH ? {hidden_filter}
-                ORDER BY rank
+                WHERE documents_fts MATCH ?
+                ORDER BY d.hidden ASC, rank
                 LIMIT 50
             """, (q,)).fetchall()
         else:
-            rows = db.execute(f"""
-                SELECT id, title, version, source_ts, fetched_at, service_id, hidden
-                FROM documents WHERE 1=1 {hidden_filter_simple} ORDER BY source_ts DESC
+            rows = db.execute("""
+                SELECT id, title, version, source_ts, fetched_at,
+                       service_id, hidden, body_markdown
+                FROM documents ORDER BY hidden ASC, source_ts DESC
             """).fetchall()
 
         total = db.execute("SELECT COUNT(*) as cnt FROM documents WHERE hidden = 0").fetchone()["cnt"]
         hidden_count = db.execute("SELECT COUNT(*) as cnt FROM documents WHERE hidden = 1").fetchone()["cnt"]
-
-        hidden_toggle = A(
-            f"Show {hidden_count} hidden" if not include_hidden else "Hide hidden",
-            href=f"/docs?show_hidden={'0' if include_hidden else '1'}{'&q=' + q if q else ''}",
-            cls="text-[11px] opacity-40 hover:opacity-70",
-        ) if hidden_count > 0 else None
 
         search_bar = Div(
             Form(
@@ -45,7 +38,6 @@ def register(rt):
                         placeholder="Search documents...",
                         cls="input input-bordered input-sm w-full max-w-xs font-mono text-xs",
                     ),
-                    Input(type="hidden", name="show_hidden", value=show_hidden) if include_hidden else None,
                     Button("Search", type="submit", cls="btn btn-primary btn-sm"),
                     A("Clear", href="/docs", cls="btn btn-ghost btn-sm") if q else None,
                     cls="flex gap-2 items-center",
@@ -65,64 +57,63 @@ def register(rt):
             return page(
                 Div(
                     H3("Documents", cls="text-sm font-semibold"),
-                    Div(
-                        Span(f"{total} pages", cls="text-[11px] opacity-40"),
-                        hidden_toggle,
-                        cls="flex items-center gap-3",
-                    ),
+                    Span(f"{total} pages" + (f" · {hidden_count} hidden" if hidden_count else ""),
+                         cls="text-[11px] opacity-40"),
                     cls="flex items-center justify-between mb-4",
                 ),
                 search_bar, empty, title="Documents",
             )
 
-        doc_rows = []
+        doc_cards = []
         for r in rows:
-            is_hidden = r["hidden"] if "hidden" in r.keys() else False
-            hide_btn = Button(
-                "Unhide" if is_hidden else "Hide",
-                hx_post=f"/docs/{r['id']}/{'unhide' if is_hidden else 'hide'}",
-                hx_target="closest .doc-row",
-                hx_swap="outerHTML",
-                cls="btn btn-ghost btn-xs opacity-0 group-hover:opacity-60 text-[10px] min-h-0 h-5 px-2",
-            )
-            doc_rows.append(
+            is_hidden = r["hidden"]
+            preview = _plain_preview(r["body_markdown"], 150)
+            hide_action = "unhide" if is_hidden else "hide"
+            hide_label = "Unhide" if is_hidden else "Hide"
+
+            doc_cards.append(
                 Div(
                     A(
                         Div(
-                            Span(r["title"], cls=f"text-sm font-medium {'opacity-40 line-through' if is_hidden else ''}"),
-                            cls="flex-1",
+                            Span(r["title"], cls="text-sm font-semibold line-clamp-1"),
+                            Span(r["source_ts"][:10] if r["source_ts"] else "",
+                                 cls="text-[10px] font-mono opacity-30"),
+                            cls="flex items-center justify-between gap-2",
                         ),
+                        P(preview, cls="text-xs opacity-50 line-clamp-4 mt-2 leading-relaxed") if preview else
+                            P("Empty page", cls="text-xs opacity-20 italic mt-2"),
                         href=f"/docs/{r['id']}",
-                        cls="flex-1",
+                        cls="block flex-1",
                     ),
                     Div(
-                        Span(f"v{r['version']}", cls="text-[10px] font-mono opacity-40 bg-base-300 px-1.5 py-0.5 rounded"),
-                        Span(r["source_ts"][:16] if r["source_ts"] else "—", cls="text-[11px] opacity-40 font-mono"),
-                        hide_btn,
-                        cls="flex items-center gap-2",
+                        Span(f"v{r['version']}", cls="text-[10px] font-mono opacity-30 bg-base-300 px-1.5 py-0.5 rounded"),
+                        Button(hide_label,
+                               hx_post=f"/docs/{r['id']}/{hide_action}",
+                               hx_target="closest .doc-card",
+                               hx_swap="outerHTML",
+                               cls="btn btn-ghost btn-xs opacity-0 group-hover:opacity-60 text-[10px] min-h-0 h-5 px-2"),
+                        cls="flex items-center justify-between mt-3 pt-2 border-t border-base-content/5",
                     ),
-                    NotStr(f'<p class="text-xs opacity-50 mt-1 line-clamp-1">{dict(r).get("snippet", "")}</p>') if q else None,
-                    cls=f"doc-row group flex items-center justify-between px-4 py-3 hover:bg-base-300/50 transition-colors border-b border-base-content/5 {'bg-base-300/30' if is_hidden else ''}",
+                    cls=f"doc-card group card bg-base-200/50 border border-base-content/5 p-4 "
+                        f"hover:bg-base-300/50 hover:border-base-content/10 transition-all "
+                        f"flex flex-col {'opacity-30' if is_hidden else ''}",
                 )
             )
 
-        doc_list = Div(
-            *doc_rows,
-            cls="card bg-base-200/50 border border-base-content/5 overflow-hidden",
+        doc_grid = Div(
+            *doc_cards,
+            cls="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3",
         )
 
         return page(
             Div(
                 H3("Documents", cls="text-sm font-semibold"),
-                Div(
-                    Span(f"{total} pages", cls="text-[11px] opacity-40"),
-                    hidden_toggle,
-                    cls="flex items-center gap-3",
-                ),
+                Span(f"{total} pages" + (f" · {hidden_count} hidden" if hidden_count else ""),
+                     cls="text-[11px] opacity-40"),
                 cls="flex items-center justify-between mb-4",
             ),
             search_bar,
-            doc_list,
+            doc_grid,
             title="Documents",
         )
 
@@ -131,46 +122,20 @@ def register(rt):
         db = get_db()
         db.execute("UPDATE documents SET hidden = 1 WHERE id = ?", (doc_id,))
         db.commit()
-        doc = db.execute("SELECT id, title, version, source_ts, hidden FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        doc = db.execute("SELECT id, title, version, source_ts, hidden, body_markdown FROM documents WHERE id = ?", (doc_id,)).fetchone()
         if doc is None:
             return ""
-        return Div(
-            A(
-                Div(Span(doc["title"], cls="text-sm font-medium opacity-40 line-through"), cls="flex-1"),
-                href=f"/docs/{doc['id']}", cls="flex-1",
-            ),
-            Div(
-                Span(f"v{doc['version']}", cls="text-[10px] font-mono opacity-40 bg-base-300 px-1.5 py-0.5 rounded"),
-                Span(doc["source_ts"][:16] if doc["source_ts"] else "—", cls="text-[11px] opacity-40 font-mono"),
-                Button("Unhide", hx_post=f"/docs/{doc['id']}/unhide", hx_target="closest .doc-row", hx_swap="outerHTML",
-                       cls="btn btn-ghost btn-xs opacity-0 group-hover:opacity-60 text-[10px] min-h-0 h-5 px-2"),
-                cls="flex items-center gap-2",
-            ),
-            cls="doc-row group flex items-center justify-between px-4 py-3 hover:bg-base-300/50 transition-colors border-b border-base-content/5 bg-base-300/30",
-        )
+        return _doc_card(doc)
 
     @rt("/docs/{doc_id}/unhide")
     def post(doc_id: int):
         db = get_db()
         db.execute("UPDATE documents SET hidden = 0 WHERE id = ?", (doc_id,))
         db.commit()
-        doc = db.execute("SELECT id, title, version, source_ts, hidden FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        doc = db.execute("SELECT id, title, version, source_ts, hidden, body_markdown FROM documents WHERE id = ?", (doc_id,)).fetchone()
         if doc is None:
             return ""
-        return Div(
-            A(
-                Div(Span(doc["title"], cls="text-sm font-medium"), cls="flex-1"),
-                href=f"/docs/{doc['id']}", cls="flex-1",
-            ),
-            Div(
-                Span(f"v{doc['version']}", cls="text-[10px] font-mono opacity-40 bg-base-300 px-1.5 py-0.5 rounded"),
-                Span(doc["source_ts"][:16] if doc["source_ts"] else "—", cls="text-[11px] opacity-40 font-mono"),
-                Button("Hide", hx_post=f"/docs/{doc['id']}/hide", hx_target="closest .doc-row", hx_swap="outerHTML",
-                       cls="btn btn-ghost btn-xs opacity-0 group-hover:opacity-60 text-[10px] min-h-0 h-5 px-2"),
-                cls="flex items-center gap-2",
-            ),
-            cls="doc-row group flex items-center justify-between px-4 py-3 hover:bg-base-300/50 transition-colors border-b border-base-content/5",
-        )
+        return _doc_card(doc)
 
     @rt("/docs/{doc_id}")
     def get(doc_id: int):
@@ -432,3 +397,67 @@ def _inline_md(text: str) -> str:
     text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2" class="link link-primary" target="_blank">\1</a>', text)
 
     return text
+
+
+def _plain_preview(md_text: str, max_chars: int = 150) -> str:
+    """Strip markdown formatting and return a plain text preview."""
+    import re
+    text = md_text.strip()
+    # Remove code blocks
+    text = re.sub(r'```[\s\S]*?```', '', text)
+    # Remove headings markers
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # Remove images
+    text = re.sub(r'!\[([^\]]*)\]\([^)]+\)', r'\1', text)
+    # Remove links but keep text
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    # Remove bold/italic markers
+    text = re.sub(r'\*{1,2}([^*]+)\*{1,2}', r'\1', text)
+    # Remove subpage references
+    text = re.sub(r'\*\*\[Subpage: [^\]]+\]\*\*', '', text)
+    # Remove list markers
+    text = re.sub(r'^[\s]*[-*]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^[\s]*\d+\.\s+', '', text, flags=re.MULTILINE)
+    # Remove checkboxes
+    text = re.sub(r'\[[ x]\]\s*', '', text)
+    # Collapse whitespace
+    text = re.sub(r'\n+', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit(' ', 1)[0] + '...'
+    return text
+
+
+def _doc_card(doc) -> 'Div':
+    """Render a single document as a grid card (used by list and hide/unhide routes)."""
+    is_hidden = doc["hidden"]
+    preview = _plain_preview(doc["body_markdown"], 150)
+    hide_action = "unhide" if is_hidden else "hide"
+    hide_label = "Unhide" if is_hidden else "Hide"
+
+    return Div(
+        A(
+            Div(
+                Span(doc["title"], cls="text-sm font-semibold line-clamp-1"),
+                Span(doc["source_ts"][:10] if doc["source_ts"] else "",
+                     cls="text-[10px] font-mono opacity-30"),
+                cls="flex items-center justify-between gap-2",
+            ),
+            P(preview, cls="text-xs opacity-50 line-clamp-4 mt-2 leading-relaxed") if preview else
+                P("Empty page", cls="text-xs opacity-20 italic mt-2"),
+            href=f"/docs/{doc['id']}",
+            cls="block flex-1",
+        ),
+        Div(
+            Span(f"v{doc['version']}", cls="text-[10px] font-mono opacity-30 bg-base-300 px-1.5 py-0.5 rounded"),
+            Button(hide_label,
+                   hx_post=f"/docs/{doc['id']}/{hide_action}",
+                   hx_target="closest .doc-card",
+                   hx_swap="outerHTML",
+                   cls="btn btn-ghost btn-xs opacity-0 group-hover:opacity-60 text-[10px] min-h-0 h-5 px-2"),
+            cls="flex items-center justify-between mt-3 pt-2 border-t border-base-content/5",
+        ),
+        cls=f"doc-card group card bg-base-200/50 border border-base-content/5 p-4 "
+            f"hover:bg-base-300/50 hover:border-base-content/10 transition-all "
+            f"flex flex-col {'opacity-30' if is_hidden else ''}",
+    )
