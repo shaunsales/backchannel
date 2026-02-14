@@ -2,7 +2,13 @@ from fasthtml.common import *
 from app.db import get_db
 from app.components.layout import page
 from app.components.service_card import service_card
+from app.components.auth_forms import notion_auth_form
 from app.components import alerts
+
+
+AUTH_FORMS = {
+    "notion": notion_auth_form,
+}
 
 
 def register(rt):
@@ -18,6 +24,9 @@ def register(rt):
         item_count = db.execute(
             "SELECT COUNT(*) as cnt FROM items WHERE service_id = ?", (service_id,)
         ).fetchone()["cnt"]
+        doc_count = db.execute(
+            "SELECT COUNT(*) as cnt FROM documents WHERE service_id = ?", (service_id,)
+        ).fetchone()["cnt"]
         s["item_count"] = item_count
 
         recent_runs = db.execute(
@@ -28,10 +37,19 @@ def register(rt):
         status_text = s["status"]
         last_sync = s["last_sync_at"] or "Never"
 
-        detail = Div(
-            H2(s["display_name"], cls="text-2xl font-bold mb-6"),
-
-            Div(
+        # Use service-specific auth form if available
+        form_fn = AUTH_FORMS.get(service_id)
+        if form_fn:
+            connection_card = Div(
+                Div(
+                    H3("Connection", cls="text-sm font-semibold mb-3"),
+                    form_fn(s),
+                    cls="card-body p-5",
+                ),
+                cls="card bg-base-200/50 border border-base-content/5 mb-4",
+            )
+        else:
+            connection_card = Div(
                 Div(
                     H3("Connection", cls="text-sm font-semibold mb-2"),
                     Div(
@@ -49,36 +67,37 @@ def register(rt):
                     Button("Disconnect", hx_post=f"/auth/{service_id}/disconnect",
                            hx_target="#service-detail", hx_swap="outerHTML",
                            cls="btn btn-outline btn-error btn-sm"),
-                    cls="card-body p-4",
+                    cls="card-body p-5",
                 ),
-                cls="card bg-base-200 shadow-sm mb-4",
+                cls="card bg-base-200/50 border border-base-content/5 mb-4",
+            )
+
+        stats_row = Div(
+            Div(
+                Span("Items", cls="text-[11px] opacity-40"),
+                Span(f"{item_count:,}", cls="text-lg font-mono font-semibold"),
+                cls="flex flex-col",
             ),
+            Div(
+                Span("Documents", cls="text-[11px] opacity-40"),
+                Span(f"{doc_count:,}", cls="text-lg font-mono font-semibold"),
+                cls="flex flex-col",
+            ) if doc_count > 0 else None,
+            Div(
+                Span("Last sync", cls="text-[11px] opacity-40"),
+                Span(last_sync[:16] if last_sync != "Never" else "Never", cls="text-xs font-mono opacity-70"),
+                cls="flex flex-col",
+            ),
+            cls="flex gap-8 mb-4",
+        )
+
+        detail = Div(
+            H2(s["display_name"], cls="text-lg font-semibold mb-4"),
+            stats_row,
+            connection_card,
 
             Div(
-                Div(
-                    H3("Sync", cls="text-sm font-semibold mb-2"),
-                    Div(
-                        Span("Last sync: ", cls="opacity-50"),
-                        Span(last_sync, cls="font-mono text-xs"),
-                        cls="text-sm mb-1",
-                    ),
-                    Div(
-                        Span("Items: ", cls="opacity-50"),
-                        Span(str(item_count), cls="font-mono text-xs"),
-                        cls="text-sm mb-3",
-                    ),
-                    Button("Sync Now", hx_post=f"/sync/{service_id}",
-                           hx_target="#sync-result", hx_swap="innerHTML",
-                           cls="btn btn-primary btn-sm",
-                           disabled=status_text != "connected"),
-                    Div(id="sync-result", cls="mt-3"),
-                    cls="card-body p-4",
-                ),
-                cls="card bg-base-200 shadow-sm mb-4",
-            ),
-
-            Div(
-                H3("Recent Runs", cls="text-sm font-semibold mb-2"),
+                H3("Recent Runs", cls="text-sm font-semibold mb-3"),
                 _runs_table(recent_runs) if recent_runs else
                 P("No sync runs yet.", cls="text-sm opacity-50"),
                 cls="mb-4",

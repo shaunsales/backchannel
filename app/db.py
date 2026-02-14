@@ -105,6 +105,59 @@ CREATE TRIGGER IF NOT EXISTS items_au AFTER UPDATE ON items BEGIN
     VALUES (new.id, new.subject, new.body_plain, new.sender, new.conversation);
 END;
 
+CREATE TABLE IF NOT EXISTS documents (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    service_id    TEXT NOT NULL REFERENCES services(id),
+    source_id     TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    body_markdown TEXT NOT NULL DEFAULT '',
+    content_hash  TEXT NOT NULL DEFAULT '',
+    version       INTEGER NOT NULL DEFAULT 1,
+    metadata      TEXT DEFAULT '{}',
+    source_ts     TEXT,
+    fetched_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    sync_run_id   INTEGER REFERENCES sync_runs(id),
+    UNIQUE(service_id, source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_docs_service ON documents(service_id);
+CREATE INDEX IF NOT EXISTS idx_docs_source_ts ON documents(source_ts DESC);
+
+CREATE TABLE IF NOT EXISTS document_versions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id   INTEGER NOT NULL REFERENCES documents(id),
+    version       INTEGER NOT NULL,
+    body_markdown TEXT NOT NULL,
+    content_hash  TEXT NOT NULL,
+    source_ts     TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_docver_doc ON document_versions(document_id, version DESC);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+    title, body_markdown,
+    content='documents',
+    content_rowid='id'
+);
+
+CREATE TRIGGER IF NOT EXISTS docs_ai AFTER INSERT ON documents BEGIN
+    INSERT INTO documents_fts(rowid, title, body_markdown)
+    VALUES (new.id, new.title, new.body_markdown);
+END;
+
+CREATE TRIGGER IF NOT EXISTS docs_ad AFTER DELETE ON documents BEGIN
+    INSERT INTO documents_fts(documents_fts, rowid, title, body_markdown)
+    VALUES ('delete', old.id, old.title, old.body_markdown);
+END;
+
+CREATE TRIGGER IF NOT EXISTS docs_au AFTER UPDATE ON documents BEGIN
+    INSERT INTO documents_fts(documents_fts, rowid, title, body_markdown)
+    VALUES ('delete', old.id, old.title, old.body_markdown);
+    INSERT INTO documents_fts(rowid, title, body_markdown)
+    VALUES (new.id, new.title, new.body_markdown);
+END;
+
 """
 
 SEED_SQL = """

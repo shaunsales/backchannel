@@ -5,9 +5,12 @@ from dataclasses import dataclass, field
 @dataclass
 class PullResult:
     items: list = field(default_factory=list)
+    documents: list = field(default_factory=list)
     new_cursor: str = ""
     items_new: int = 0
     items_updated: int = 0
+    docs_new: int = 0
+    docs_updated: int = 0
 
 
 class BasePuller(ABC):

@@ -2,17 +2,21 @@ from fasthtml.common import *
 from app.config import DASHBOARD_PORT
 from app.db import init_db
 from app.components.layout import head_tags
-from app.routes import dashboard, services, sync, auth
+from app.routes import dashboard, services, sync, auth, docs
+from app.pullers.notion import NotionPuller
+from app.services.manager import register_puller
 
 hdrs = head_tags()
 app, rt = fast_app(hdrs=hdrs, live=True)
 
 init_db()
+register_puller("notion", NotionPuller)
 
 dashboard.register(rt)
 services.register(rt)
 sync.register(rt)
 auth.register(rt)
+docs.register(rt)
 
 
 if __name__ == "__main__":

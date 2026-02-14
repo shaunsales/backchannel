@@ -1,4 +1,5 @@
 import json
+import hashlib
 from datetime import datetime, timezone
 from app.db import get_db
 
@@ -96,6 +97,39 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
                     metadata=excluded.metadata, source_ts=excluded.source_ts
             """, item)
 
+        docs_new = 0
+        docs_updated = 0
+        for doc in result.documents:
+            content_hash = hashlib.sha256(doc["body_markdown"].encode()).hexdigest()
+            existing = db.execute(
+                "SELECT id, content_hash, version FROM documents WHERE service_id = ? AND source_id = ?",
+                (service_id, doc["source_id"]),
+            ).fetchone()
+
+            if existing is None:
+                db.execute("""
+                    INSERT INTO documents (service_id, source_id, title, body_markdown,
+                        content_hash, version, metadata, source_ts, sync_run_id)
+                    VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+                """, (service_id, doc["source_id"], doc["title"], doc["body_markdown"],
+                      content_hash, doc.get("metadata", "{}"), doc.get("source_ts"), run_id))
+                docs_new += 1
+            elif existing["content_hash"] != content_hash:
+                new_version = existing["version"] + 1
+                db.execute("""
+                    INSERT INTO document_versions (document_id, version, body_markdown, content_hash, source_ts)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (existing["id"], existing["version"],
+                      db.execute("SELECT body_markdown FROM documents WHERE id = ?", (existing["id"],)).fetchone()["body_markdown"],
+                      existing["content_hash"], doc.get("source_ts")))
+                db.execute("""
+                    UPDATE documents SET title=?, body_markdown=?, content_hash=?,
+                        version=?, metadata=?, source_ts=?, fetched_at=datetime('now'), sync_run_id=?
+                    WHERE id=?
+                """, (doc["title"], doc["body_markdown"], content_hash,
+                      new_version, doc.get("metadata", "{}"), doc.get("source_ts"), run_id, existing["id"]))
+                docs_updated += 1
+
         now = datetime.now(timezone.utc).isoformat()
         started = db.execute(
             "SELECT started_at FROM sync_runs WHERE id = ?", (run_id,)
@@ -103,11 +137,15 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
 
         duration = (datetime.fromisoformat(now) - datetime.fromisoformat(started)).total_seconds()
 
+        total_fetched = len(result.items) + len(result.documents)
+        total_new = result.items_new + docs_new
+        total_updated = result.items_updated + docs_updated
+
         db.execute("""
             UPDATE sync_runs SET status='success', completed_at=?, items_fetched=?,
                 items_new=?, items_updated=?, cursor_after=?, duration_sec=?
             WHERE id=?
-        """, (now, len(result.items), result.items_new, result.items_updated,
+        """, (now, total_fetched, total_new, total_updated,
               result.new_cursor, duration, run_id))
 
         db.execute(
