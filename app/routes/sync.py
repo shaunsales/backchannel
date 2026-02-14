@@ -25,15 +25,29 @@ def register(rt):
                 "SELECT items_fetched, items_new, items_updated, duration_sec FROM sync_runs WHERE id = ?",
                 (result["run_id"],)
             ).fetchone()
-            parts = [f"{run['items_fetched']} pages fetched"]
-            if run["items_new"]:
-                parts.append(f"{run['items_new']} new")
-            if run["items_updated"]:
-                parts.append(f"{run['items_updated']} updated")
-            if result.get("docs_deleted"):
-                parts.append(f"{result['docs_deleted']} removed")
-            if run["duration_sec"]:
-                parts.append(f"{run['duration_sec']:.1f}s")
+            deleted = result.get("docs_deleted", 0)
+            fetched = run["items_fetched"]
+            new = run["items_new"]
+            updated = run["items_updated"]
+            duration = run["duration_sec"]
+
+            if not fetched and not new and not updated and not deleted:
+                msg = f"{service['display_name']} — all documents up to date"
+                if duration:
+                    msg += f" ({duration:.1f}s)"
+                return alerts.success(msg)
+
+            parts = []
+            if fetched:
+                parts.append(f"{fetched} pages fetched")
+            if new:
+                parts.append(f"{new} new")
+            if updated:
+                parts.append(f"{updated} updated")
+            if deleted:
+                parts.append(f"{deleted} removed")
+            if duration:
+                parts.append(f"{duration:.1f}s")
             return alerts.success(
                 f"{service['display_name']} sync complete — {', '.join(parts)}"
             )
