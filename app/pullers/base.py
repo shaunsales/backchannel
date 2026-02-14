@@ -11,6 +11,7 @@ class PullResult:
     items_updated: int = 0
     docs_new: int = 0
     docs_updated: int = 0
+    all_source_ids: set = field(default_factory=set)  # for deletion detection on full syncs
 
 
 class BasePuller(ABC):

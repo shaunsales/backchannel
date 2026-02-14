@@ -23,6 +23,7 @@ class NotionPuller(BasePuller):
         client = self._client()
         max_depth = self.config.get("max_depth", 5)
         documents = []
+        all_source_ids = set()  # track all live page IDs for deletion detection
 
         log.info("Starting Notion sync (cursor=%s)", cursor or "none")
 
@@ -45,7 +46,7 @@ class NotionPuller(BasePuller):
                 last_edited = page.get("last_edited_time", "")
                 title = _extract_title(page) or ""
 
-                # Skip archived or trashed pages
+                # Skip archived or trashed pages (don't add to all_source_ids)
                 if page.get("archived") or page.get("in_trash"):
                     log.info("[%d] Skipped (archived/trashed): %s", page_num, title or "Untitled")
                     skipped += 1
@@ -56,6 +57,9 @@ class NotionPuller(BasePuller):
                     log.info("[%d] Skipped (no title): %s", page_num, page["id"][:12])
                     skipped += 1
                     continue
+
+                # Track this page as live (exists + not trashed + has title)
+                all_source_ids.add(page["id"])
 
                 # Incremental: skip pages not edited since cursor
                 if cursor and last_edited and last_edited <= cursor:
@@ -96,6 +100,7 @@ class NotionPuller(BasePuller):
             documents=documents,
             new_cursor=new_cursor,
             docs_new=len(documents),
+            all_source_ids=all_source_ids,
         )
 
     def normalize(self, page: dict, client: Client, max_depth: int = 5) -> dict | None:

@@ -30,6 +30,8 @@ def register(rt):
                 parts.append(f"{run['items_new']} new")
             if run["items_updated"]:
                 parts.append(f"{run['items_updated']} updated")
+            if result.get("docs_deleted"):
+                parts.append(f"{result['docs_deleted']} removed")
             if run["duration_sec"]:
                 parts.append(f"{run['duration_sec']:.1f}s")
             return alerts.success(

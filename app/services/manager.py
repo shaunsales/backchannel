@@ -1,7 +1,10 @@
 import json
 import hashlib
+import logging
 from datetime import datetime, timezone
 from app.db import get_db
+
+log = logging.getLogger(__name__)
 
 
 PULLER_REGISTRY = {}
@@ -130,6 +133,22 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
                       new_version, doc.get("metadata", "{}"), doc.get("source_ts"), run_id, existing["id"]))
                 docs_updated += 1
 
+        # Deletion detection: remove docs no longer present in source
+        docs_deleted = 0
+        if result.all_source_ids:
+            existing_docs = db.execute(
+                "SELECT id, source_id, title FROM documents WHERE service_id = ?",
+                (service_id,),
+            ).fetchall()
+            for ed in existing_docs:
+                if ed["source_id"] not in result.all_source_ids:
+                    log.info("Removing deleted doc: %s (source_id=%s)", ed["title"], ed["source_id"][:12])
+                    db.execute("DELETE FROM document_versions WHERE document_id = ?", (ed["id"],))
+                    db.execute("DELETE FROM documents WHERE id = ?", (ed["id"],))
+                    docs_deleted += 1
+            if docs_deleted:
+                log.info("Removed %d documents no longer in source", docs_deleted)
+
         now = datetime.utcnow().isoformat()
         started = db.execute(
             "SELECT started_at FROM sync_runs WHERE id = ?", (run_id,)
@@ -154,7 +173,7 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
         )
         db.commit()
 
-        return {"run_id": run_id, "status": "success", "items": len(result.items)}
+        return {"run_id": run_id, "status": "success", "items": len(result.items), "docs_deleted": docs_deleted}
 
     except Exception as e:
         now = datetime.now(timezone.utc).isoformat()
