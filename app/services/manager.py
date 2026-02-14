@@ -130,7 +130,7 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
                       new_version, doc.get("metadata", "{}"), doc.get("source_ts"), run_id, existing["id"]))
                 docs_updated += 1
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.utcnow().isoformat()
         started = db.execute(
             "SELECT started_at FROM sync_runs WHERE id = ?", (run_id,)
         ).fetchone()["started_at"]

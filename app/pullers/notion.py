@@ -24,25 +24,59 @@ class NotionPuller(BasePuller):
         max_depth = self.config.get("max_depth", 5)
         documents = []
 
+        log.info("Starting Notion sync (cursor=%s)", cursor or "none")
+
         # Paginate through all pages
         start_cursor = None
+        page_num = 0
+        skipped = 0
         while True:
             params = {"filter": {"property": "object", "value": "page"}, "page_size": 100}
             if start_cursor:
                 params["start_cursor"] = start_cursor
 
+            log.info("Fetching page list (batch cursor=%s)...", start_cursor or "start")
             resp = client.search(**params)
+            batch = resp.get("results", [])
+            log.info("Got %d pages in this batch", len(batch))
 
-            for page in resp.get("results", []):
+            for page in batch:
+                page_num += 1
                 last_edited = page.get("last_edited_time", "")
+                title = _extract_title(page) or ""
+
+                # Skip archived or trashed pages
+                if page.get("archived") or page.get("in_trash"):
+                    log.info("[%d] Skipped (archived/trashed): %s", page_num, title or "Untitled")
+                    skipped += 1
+                    continue
+
+                # Skip untitled pages with no title at all
+                if not title.strip():
+                    log.info("[%d] Skipped (no title): %s", page_num, page["id"][:12])
+                    skipped += 1
+                    continue
 
                 # Incremental: skip pages not edited since cursor
                 if cursor and last_edited and last_edited <= cursor:
+                    skipped += 1
                     continue
 
+                log.info("[%d] Processing: %s (edited %s)", page_num, title, last_edited)
                 doc = self.normalize(page, client, max_depth)
-                if doc:
-                    documents.append(doc)
+                if doc is None:
+                    skipped += 1
+                    continue
+
+                # Skip pages with empty/trivial content
+                body = doc["body_markdown"].strip()
+                if not body:
+                    log.info("[%d] Skipped (empty body): %s", page_num, title)
+                    skipped += 1
+                    continue
+
+                documents.append(doc)
+                log.info("[%d] Done: %s (%d chars markdown)", page_num, title, len(body))
 
             if not resp.get("has_more"):
                 break
@@ -54,6 +88,9 @@ class NotionPuller(BasePuller):
             ts = doc.get("source_ts", "")
             if ts > new_cursor:
                 new_cursor = ts
+
+        log.info("Notion sync complete: %d docs fetched, %d skipped, cursor=%s",
+                 len(documents), skipped, new_cursor[:20] if new_cursor else "none")
 
         return PullResult(
             documents=documents,

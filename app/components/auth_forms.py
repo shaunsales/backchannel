@@ -22,10 +22,13 @@ def notion_auth_form(service: dict):
             ),
             Div(
                 Button(
-                    "Sync Now",
+                    Span("Sync Now", cls="sync-label"),
+                    Span("Syncing...", cls="loading loading-spinner loading-xs htmx-indicator"),
                     hx_post=f"/sync/notion",
                     hx_target="#notion-auth-result",
                     hx_swap="innerHTML",
+                    hx_indicator="closest button",
+                    hx_disabled_elt="this",
                     cls="btn btn-primary btn-sm",
                 ),
                 Button(
@@ -33,6 +36,7 @@ def notion_auth_form(service: dict):
                     hx_post="/auth/notion/test",
                     hx_target="#notion-auth-result",
                     hx_swap="innerHTML",
+                    hx_disabled_elt="this",
                     cls="btn btn-ghost btn-sm border border-base-content/10",
                 ),
                 Button(

@@ -25,7 +25,7 @@ def register(rt):
             "SELECT COUNT(*) as cnt FROM items WHERE service_id = ?", (service_id,)
         ).fetchone()["cnt"]
         doc_count = db.execute(
-            "SELECT COUNT(*) as cnt FROM documents WHERE service_id = ?", (service_id,)
+            "SELECT COUNT(*) as cnt FROM documents WHERE service_id = ? AND hidden = 0", (service_id,)
         ).fetchone()["cnt"]
         s["item_count"] = item_count
 

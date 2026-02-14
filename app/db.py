@@ -22,6 +22,11 @@ def init_db():
     db = get_db()
     db.executescript(SCHEMA_SQL)
     db.executescript(SEED_SQL)
+    # Mark any stale "running" sync runs as failed (from prior crash/restart)
+    db.execute(
+        "UPDATE sync_runs SET status='failed', error_message='Server restarted', "
+        "completed_at=datetime('now') WHERE status='running'"
+    )
     db.commit()
 
 
@@ -113,6 +118,7 @@ CREATE TABLE IF NOT EXISTS documents (
     body_markdown TEXT NOT NULL DEFAULT '',
     content_hash  TEXT NOT NULL DEFAULT '',
     version       INTEGER NOT NULL DEFAULT 1,
+    hidden        INTEGER NOT NULL DEFAULT 0,
     metadata      TEXT DEFAULT '{}',
     source_ts     TEXT,
     fetched_at    TEXT NOT NULL DEFAULT (datetime('now')),

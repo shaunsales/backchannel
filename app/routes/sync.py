@@ -21,8 +21,19 @@ def register(rt):
 
         try:
             result = manager.run_sync(service_id, run_type="manual")
+            run = db.execute(
+                "SELECT items_fetched, items_new, items_updated, duration_sec FROM sync_runs WHERE id = ?",
+                (result["run_id"],)
+            ).fetchone()
+            parts = [f"{run['items_fetched']} pages fetched"]
+            if run["items_new"]:
+                parts.append(f"{run['items_new']} new")
+            if run["items_updated"]:
+                parts.append(f"{run['items_updated']} updated")
+            if run["duration_sec"]:
+                parts.append(f"{run['duration_sec']:.1f}s")
             return alerts.success(
-                f"Synced {result['items']} items from {service['display_name']}"
+                f"{service['display_name']} sync complete — {', '.join(parts)}"
             )
         except Exception as e:
             return alerts.error(f"Sync failed: {e}")

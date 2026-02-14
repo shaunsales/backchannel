@@ -9,6 +9,10 @@ CUSTOM_CSS = Style("""
     .sidebar-link:hover { background: oklch(var(--b3)); }
     .stat-card { transition: transform 0.15s ease; }
     .stat-card:hover { transform: translateY(-1px); }
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline-flex; }
+    .htmx-request .sync-label { display: none; }
+    .htmx-request.htmx-request { opacity: 0.7; pointer-events: none; }
 """)
 
 

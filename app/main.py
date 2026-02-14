@@ -1,3 +1,6 @@
+import logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
 from fasthtml.common import *
 from app.config import DASHBOARD_PORT
 from app.db import init_db
