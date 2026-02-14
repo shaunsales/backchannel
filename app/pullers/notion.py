@@ -153,7 +153,9 @@ def _fetch_blocks_recursive(client: Client, block_id: str, depth: int, max_depth
         resp = client.blocks.children.list(**params)
 
         for block in resp.get("results", []):
-            if block.get("has_children"):
+            btype = block.get("type", "")
+            # Don't recurse into child pages/databases — they're fetched as standalone docs
+            if block.get("has_children") and btype not in ("child_page", "child_database"):
                 block["_children"] = _fetch_blocks_recursive(
                     client, block["id"], depth + 1, max_depth
                 )
