@@ -80,6 +80,8 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
     ).lastrowid
     db.commit()
 
+    log.info("Starting sync for %s (run_id=%d, cursor=%s)", service_id, run_id, cursor_before or "none")
+
     try:
         puller = get_puller(service_id)
         result = puller.pull(cursor=cursor_before)
@@ -100,6 +102,9 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
                     metadata=excluded.metadata, source_ts=excluded.source_ts
             """, item)
 
+        if result.documents:
+            log.info("Processing %d documents...", len(result.documents))
+
         docs_new = 0
         docs_updated = 0
         for doc in result.documents:
@@ -118,6 +123,7 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
                       content_hash, doc.get("metadata", "{}"), doc.get("source_ts"), run_id))
                 docs_new += 1
             elif existing["content_hash"] != content_hash:
+                log.info("Updated: %s (v%d → v%d)", doc["title"], existing["version"], existing["version"] + 1)
                 new_version = existing["version"] + 1
                 db.execute("""
                     INSERT INTO document_versions (document_id, version, body_markdown, content_hash, source_ts)
@@ -173,9 +179,13 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
         )
         db.commit()
 
+        log.info("Sync complete for %s: %d fetched, %d new, %d updated, %d deleted (%.1fs)",
+                 service_id, total_fetched, total_new, total_updated, docs_deleted, duration)
+
         return {"run_id": run_id, "status": "success", "items": len(result.items), "docs_deleted": docs_deleted}
 
     except Exception as e:
+        log.error("Sync failed for %s: %s", service_id, e)
         now = datetime.now(timezone.utc).isoformat()
         db.execute(
             "UPDATE sync_runs SET status='failed', completed_at=?, error_message=? WHERE id=?",

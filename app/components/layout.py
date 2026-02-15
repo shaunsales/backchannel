@@ -13,6 +13,80 @@ CUSTOM_CSS = Style("""
     .htmx-request .htmx-indicator { display: inline-flex; }
     .htmx-request .sync-label { display: none; }
     .htmx-request.htmx-request { opacity: 0.7; pointer-events: none; }
+    #log-panel { transition: height 0.2s ease; }
+    #log-panel.collapsed { height: 0; overflow: hidden; border-top: none; }
+    #log-panel .log-line { font-size: 11px; line-height: 1.6; font-family: ui-monospace, monospace; }
+    #log-panel .log-line .log-ts { opacity: 0.3; }
+    #log-panel .log-line .log-name { opacity: 0.5; color: oklch(var(--p)); }
+    #log-panel .log-line .log-msg { opacity: 0.7; }
+    #log-panel .log-line.level-ERROR .log-msg { color: oklch(var(--er)); opacity: 1; }
+    #log-panel .log-line.level-WARNING .log-msg { color: oklch(var(--wa)); opacity: 0.9; }
+""")
+
+LOG_PANEL_JS = Script("""
+(function() {
+    let evtSource = null;
+    const panel = document.getElementById('log-panel');
+    const content = document.getElementById('log-content');
+    const badge = document.getElementById('log-badge');
+    let lineCount = 0;
+    let isOpen = false;
+
+    function togglePanel() {
+        isOpen = !isOpen;
+        panel.classList.toggle('collapsed', !isOpen);
+        if (isOpen && !evtSource) connectSSE();
+        if (isOpen) {
+            badge.style.display = 'none';
+            lineCount = 0;
+            scrollToBottom();
+        }
+    }
+    window.toggleLogPanel = togglePanel;
+
+    function scrollToBottom() {
+        content.scrollTop = content.scrollHeight;
+    }
+
+    function addLine(entry) {
+        const div = document.createElement('div');
+        div.className = 'log-line level-' + (entry.level || 'INFO');
+        div.innerHTML = '<span class="log-ts">' + (entry.ts || '') + '</span> '
+            + '<span class="log-name">' + (entry.name || '') + '</span> '
+            + '<span class="log-msg">' + escapeHtml(entry.msg || '') + '</span>';
+        content.appendChild(div);
+        // Cap at 500 lines
+        while (content.children.length > 500) content.removeChild(content.firstChild);
+        if (isOpen) scrollToBottom();
+        else {
+            lineCount++;
+            badge.textContent = lineCount > 99 ? '99+' : lineCount;
+            badge.style.display = 'flex';
+        }
+    }
+
+    function escapeHtml(s) {
+        const d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    function connectSSE() {
+        if (evtSource) evtSource.close();
+        evtSource = new EventSource('/api/logs/stream');
+        evtSource.onmessage = function(e) {
+            try { addLine(JSON.parse(e.data)); } catch(err) {}
+        };
+        evtSource.onerror = function() {
+            evtSource.close();
+            evtSource = null;
+            setTimeout(connectSSE, 3000);
+        };
+    }
+
+    // Auto-connect SSE so badge shows new logs even when panel is closed
+    connectSSE();
+})();
 """)
 
 
@@ -115,12 +189,47 @@ def header(title="Dashboard"):
                     hx_swap="innerHTML",
                     cls="btn btn-ghost btn-sm gap-1.5 h-8 min-h-0",
                 ),
+                Div(
+                    Button(
+                        NotStr('<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z"/></svg>'),
+                        Span("Logs", cls="text-xs"),
+                        Span(id="log-badge", cls="absolute -top-1 -right-1 bg-primary text-primary-content text-[9px] "
+                             "font-bold rounded-full w-4 h-4 items-center justify-center",
+                             style="display:none"),
+                        onclick="toggleLogPanel()",
+                        cls="btn btn-ghost btn-sm gap-1.5 h-8 min-h-0 relative",
+                    ),
+                ),
                 cls="flex items-center gap-2",
             ),
             cls="flex items-center justify-between w-full px-6",
         ),
         Div(id="sync-banner"),
         cls="bg-base-100 sticky top-0 z-50 h-12 min-h-0 flex flex-col justify-center border-b border-base-content/5",
+    )
+
+
+def log_panel():
+    return Div(
+        Div(
+            Div(
+                NotStr('<svg class="w-3.5 h-3.5 opacity-50" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z"/></svg>'),
+                Span("Log Output", cls="text-[11px] font-semibold opacity-50 uppercase tracking-wider"),
+                cls="flex items-center gap-2",
+            ),
+            Div(
+                Button("Clear", onclick="document.getElementById('log-content').innerHTML=''",
+                       cls="btn btn-ghost btn-xs text-[10px] opacity-40 hover:opacity-70 h-5 min-h-0"),
+                Button("\u2715", onclick="toggleLogPanel()",
+                       cls="btn btn-ghost btn-xs text-[10px] opacity-40 hover:opacity-70 h-5 min-h-0 px-1"),
+                cls="flex items-center gap-1",
+            ),
+            cls="flex items-center justify-between px-4 py-2 border-b border-base-content/5",
+        ),
+        Div(id="log-content", cls="px-4 py-2 overflow-y-auto", style="height: calc(100% - 36px)"),
+        id="log-panel",
+        cls="collapsed fixed bottom-0 left-60 right-0 bg-base-200 border-t border-base-content/10 z-40",
+        style="height: 240px",
     )
 
 
@@ -135,5 +244,7 @@ def page(*content, title="Dashboard"):
             ),
             cls="flex",
         ),
+        log_panel(),
+        LOG_PANEL_JS,
         data_theme="dark",
     )

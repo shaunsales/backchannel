@@ -1,6 +1,9 @@
 import json
+import asyncio
+from starlette.responses import StreamingResponse
 from fasthtml.common import *
 from app.db import get_db
+from app import logstream
 
 
 def register(rt):
@@ -258,6 +261,47 @@ def register(rt):
                 for s in services
             ],
         })
+
+    # ── Log Stream (SSE) ─────────────────────────────────────────
+
+    @rt("/api/logs/stream")
+    async def get():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def on_log(entry):
+            try:
+                queue.put_nowait(entry)
+            except asyncio.QueueFull:
+                pass
+
+        logstream.subscribe(on_log)
+
+        async def event_generator():
+            try:
+                # Send buffered history first
+                for entry in logstream.get_buffer():
+                    yield f"data: {json.dumps(entry)}\n\n"
+                # Then stream new entries
+                while True:
+                    try:
+                        entry = await asyncio.wait_for(queue.get(), timeout=15)
+                        yield f"data: {json.dumps(entry)}\n\n"
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+            except asyncio.CancelledError:
+                pass
+            finally:
+                logstream.unsubscribe(on_log)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @rt("/api/logs/buffer")
+    def get():
+        return JSONResponse(logstream.get_buffer())
 
 
 # ── Helpers ──────────────────────────────────────────────────────
