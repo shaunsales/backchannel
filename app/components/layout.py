@@ -23,71 +23,88 @@ CUSTOM_CSS = Style("""
     #log-panel .log-line.level-WARNING .log-msg { color: oklch(var(--wa)); opacity: 0.9; }
 """)
 
-LOG_PANEL_JS = Script("""
+LOG_PANEL_JS = NotStr("""<script>
 (function() {
-    let evtSource = null;
-    const panel = document.getElementById('log-panel');
-    const content = document.getElementById('log-content');
-    const badge = document.getElementById('log-badge');
-    let lineCount = 0;
-    let isOpen = false;
+    var evtSource = null;
+    var lineCount = 0;
+    var isOpen = false;
 
-    function togglePanel() {
+    function getPanel() { return document.getElementById('log-panel'); }
+    function getContent() { return document.getElementById('log-content'); }
+    function getBadge() { return document.getElementById('log-badge'); }
+
+    window.toggleLogPanel = function() {
         isOpen = !isOpen;
-        panel.classList.toggle('collapsed', !isOpen);
+        var p = getPanel();
+        if (!p) return;
+        p.classList.toggle('collapsed', !isOpen);
         if (isOpen && !evtSource) connectSSE();
         if (isOpen) {
-            badge.style.display = 'none';
+            var b = getBadge();
+            if (b) { b.style.display = 'none'; }
             lineCount = 0;
             scrollToBottom();
         }
-    }
-    window.toggleLogPanel = togglePanel;
+    };
+
+    window.clearLogPanel = function() {
+        var c = getContent();
+        if (c) c.innerHTML = '';
+    };
 
     function scrollToBottom() {
-        content.scrollTop = content.scrollHeight;
+        var c = getContent();
+        if (c) c.scrollTop = c.scrollHeight;
     }
 
     function addLine(entry) {
-        const div = document.createElement('div');
+        var c = getContent();
+        if (!c) return;
+        var div = document.createElement('div');
         div.className = 'log-line level-' + (entry.level || 'INFO');
-        div.innerHTML = '<span class="log-ts">' + (entry.ts || '') + '</span> '
-            + '<span class="log-name">' + (entry.name || '') + '</span> '
-            + '<span class="log-msg">' + escapeHtml(entry.msg || '') + '</span>';
-        content.appendChild(div);
-        // Cap at 500 lines
-        while (content.children.length > 500) content.removeChild(content.firstChild);
+        var ts = document.createElement('span');
+        ts.className = 'log-ts';
+        ts.textContent = entry.ts || '';
+        var name = document.createElement('span');
+        name.className = 'log-name';
+        name.textContent = entry.name || '';
+        var msg = document.createElement('span');
+        msg.className = 'log-msg';
+        msg.textContent = entry.msg || '';
+        div.appendChild(ts);
+        div.appendChild(document.createTextNode(' '));
+        div.appendChild(name);
+        div.appendChild(document.createTextNode(' '));
+        div.appendChild(msg);
+        c.appendChild(div);
+        while (c.children.length > 500) c.removeChild(c.firstChild);
         if (isOpen) scrollToBottom();
         else {
             lineCount++;
-            badge.textContent = lineCount > 99 ? '99+' : lineCount;
-            badge.style.display = 'flex';
+            var b = getBadge();
+            if (b) {
+                b.textContent = lineCount > 99 ? '99+' : lineCount;
+                b.style.display = 'flex';
+            }
         }
     }
 
-    function escapeHtml(s) {
-        const d = document.createElement('div');
-        d.textContent = s;
-        return d.innerHTML;
-    }
-
     function connectSSE() {
-        if (evtSource) evtSource.close();
+        if (evtSource) { try { evtSource.close(); } catch(e) {} }
         evtSource = new EventSource('/api/logs/stream');
         evtSource.onmessage = function(e) {
             try { addLine(JSON.parse(e.data)); } catch(err) {}
         };
         evtSource.onerror = function() {
-            evtSource.close();
+            try { evtSource.close(); } catch(e) {}
             evtSource = null;
             setTimeout(connectSSE, 3000);
         };
     }
 
-    // Auto-connect SSE so badge shows new logs even when panel is closed
     connectSSE();
 })();
-""")
+</script>""")
 
 
 def logo(size=28):
@@ -182,23 +199,13 @@ def header(title="Dashboard"):
             ),
             Div(
                 Button(
-                    NotStr('<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>'),
-                    Span("Sync All", cls="text-xs"),
-                    hx_post="/sync/all",
-                    hx_target="#sync-banner",
-                    hx_swap="innerHTML",
-                    cls="btn btn-ghost btn-sm gap-1.5 h-8 min-h-0",
-                ),
-                Div(
-                    Button(
-                        NotStr('<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z"/></svg>'),
-                        Span("Logs", cls="text-xs"),
-                        Span(id="log-badge", cls="absolute -top-1 -right-1 bg-primary text-primary-content text-[9px] "
-                             "font-bold rounded-full w-4 h-4 items-center justify-center",
-                             style="display:none"),
-                        onclick="toggleLogPanel()",
-                        cls="btn btn-ghost btn-sm gap-1.5 h-8 min-h-0 relative",
-                    ),
+                    NotStr('<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z"/></svg>'),
+                    Span("Logs", cls="text-xs"),
+                    Span(id="log-badge", cls="absolute -top-1 -right-1 bg-primary text-primary-content text-[9px] "
+                         "font-bold rounded-full w-4 h-4 items-center justify-center",
+                         style="display:none"),
+                    onclick="toggleLogPanel()",
+                    cls="btn btn-ghost btn-sm gap-1.5 h-8 min-h-0 relative",
                 ),
                 cls="flex items-center gap-2",
             ),
@@ -218,7 +225,7 @@ def log_panel():
                 cls="flex items-center gap-2",
             ),
             Div(
-                Button("Clear", onclick="document.getElementById('log-content').innerHTML=''",
+                Button("Clear", onclick="clearLogPanel()",
                        cls="btn btn-ghost btn-xs text-[10px] opacity-40 hover:opacity-70 h-5 min-h-0"),
                 Button("\u2715", onclick="toggleLogPanel()",
                        cls="btn btn-ghost btn-xs text-[10px] opacity-40 hover:opacity-70 h-5 min-h-0 px-1"),
