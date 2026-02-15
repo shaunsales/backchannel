@@ -5,7 +5,7 @@ from fasthtml.common import *
 from app.config import DASHBOARD_PORT
 from app.db import init_db
 from app.components.layout import head_tags
-from app.routes import dashboard, services, sync, auth, docs
+from app.routes import dashboard, services, sync, auth, docs, api
 from app.pullers.notion import NotionPuller
 from app.services.manager import register_puller
 
@@ -20,6 +20,7 @@ services.register(rt)
 sync.register(rt)
 auth.register(rt)
 docs.register(rt)
+api.register(rt)
 
 
 if __name__ == "__main__":
