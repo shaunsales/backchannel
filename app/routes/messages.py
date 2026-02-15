@@ -145,31 +145,28 @@ def register(rt):
             is_me = r["sender_is_me"]
             sender = r["sender"] or "Unknown"
             body = r.get("snippet") if q else _truncate(r["body_plain"], 200)
-            ts = r["source_ts"][:16] if r["source_ts"] else ""
             conv = r["conversation"] or ""
             sid = r["service_id"]
 
-            sender_badge = Span(
-                "You" if is_me else sender,
-                cls=f"text-xs font-medium {'text-primary' if is_me else 'opacity-70'}",
-            )
+            # Build "From → To" label
+            from_name = "You" if is_me else sender
+            to_name = conv if conv else ("You" if not is_me else "")
+            direction = Div(
+                Span(from_name, cls=f"text-xs font-medium {'text-primary' if is_me else ''}"),
+                Span("→", cls="opacity-40 text-[10px] mx-0.5"),
+                Span(to_name, cls=f"text-xs font-medium {'text-primary' if not is_me and to_name == 'You' else 'opacity-60'}"),
+                cls="flex items-center gap-0.5",
+            ) if to_name else Span(from_name, cls=f"text-xs font-medium {'text-primary' if is_me else ''}")
 
             svc_icon = NotStr(SERVICE_ICONS.get(sid, ""))
+            human_ts = _humanize_ts(r["source_ts"])
 
             msg_cards.append(
                 Div(
                     A(
                         Div(
-                            Div(
-                                svc_icon,
-                                sender_badge,
-                                Span("→", cls="opacity-30 text-[10px]") if conv else None,
-                                A(conv[:35] + ("..." if len(conv) > 35 else ""),
-                                  href=_filter_url(service=sid, conversation=conv),
-                                  cls="text-xs opacity-50 hover:opacity-80") if conv else None,
-                                cls="flex items-center gap-1.5 flex-wrap",
-                            ),
-                            Span(ts, cls="text-[10px] font-mono opacity-30 shrink-0"),
+                            Div(svc_icon, direction, cls="flex items-center gap-1.5"),
+                            Span(human_ts, cls="text-[11px] opacity-40 shrink-0"),
                             cls="flex items-center justify-between gap-2",
                         ),
                         P(NotStr(body) if q else body,
@@ -300,6 +297,18 @@ def _filter_url(q="", service="", conversation=""):
         from urllib.parse import quote
         params.append(f"conversation={quote(conversation)}")
     return "/messages" + ("?" + "&".join(params) if params else "")
+
+
+def _humanize_ts(ts_str):
+    """Format ISO timestamp as '13:05 Jun 12, 2024'."""
+    if not ts_str:
+        return ""
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        return dt.strftime("%H:%M %b %d, %Y")
+    except Exception:
+        return ts_str[:16] if ts_str else ""
 
 
 def _truncate(text, length=200):
