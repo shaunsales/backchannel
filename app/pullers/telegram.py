@@ -13,7 +13,7 @@ from pathlib import Path
 
 from telethon import TelegramClient
 from telethon.tl.types import (
-    User, Chat, Channel,
+    User, Chat, Channel, ChannelForbidden, ChatForbidden,
     MessageMediaPhoto, MessageMediaDocument, MessageMediaWebPage,
 )
 
@@ -22,8 +22,9 @@ from app.config import TELEGRAM_SESSION_PATH
 
 log = logging.getLogger(__name__)
 
-DEFAULT_SYNC_DAYS = 90
-MAX_MESSAGES_PER_DIALOG = 5000
+DEFAULT_SYNC_DAYS = 365
+MAX_MESSAGES_PER_DIALOG = 200
+PREVIEW_SAMPLE_MESSAGES = 5  # messages to peek at per dialog during preview
 
 
 def _run_async(coro):
@@ -32,6 +33,15 @@ def _run_async(coro):
     try:
         return loop.run_until_complete(coro)
     finally:
+        # Cancel any remaining Telethon background tasks before closing
+        try:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:
+            pass
         loop.close()
 
 
@@ -94,6 +104,48 @@ def _media_summary(media) -> str | None:
     return f"[Media: {type(media).__name__}]"
 
 
+def _dialog_type(entity) -> str:
+    """Return a human-readable type for a dialog entity."""
+    if isinstance(entity, User):
+        return "bot" if entity.bot else "private"
+    if isinstance(entity, Channel):
+        return "channel" if entity.broadcast else "group"
+    if isinstance(entity, Chat):
+        return "group"
+    if isinstance(entity, (ChannelForbidden, ChatForbidden)):
+        return "forbidden"
+    return "unknown"
+
+
+def _should_skip_dialog(dialog, entity, since_dt) -> str | None:
+    """Return a skip reason string, or None if dialog should be synced."""
+    # Skip forbidden/deleted chats
+    if isinstance(entity, (ChannelForbidden, ChatForbidden)):
+        return "forbidden/deleted"
+
+    # Skip archived dialogs
+    if dialog.archived:
+        return "archived"
+
+    # Skip bots
+    if isinstance(entity, User) and entity.bot:
+        return "bot"
+
+    # Skip broadcast channels (keep supergroups)
+    if isinstance(entity, Channel) and entity.broadcast:
+        return "channel"
+
+    # Skip inactive dialogs (no messages within cutoff)
+    if dialog.date:
+        last_msg_dt = dialog.date
+        if last_msg_dt.tzinfo is None:
+            last_msg_dt = last_msg_dt.replace(tzinfo=timezone.utc)
+        if last_msg_dt < since_dt:
+            return f"inactive since {last_msg_dt.strftime('%Y-%m-%d')}"
+
+    return None
+
+
 class TelegramPuller(BasePuller):
 
     def _client(self):
@@ -116,6 +168,76 @@ class TelegramPuller(BasePuller):
                 await client.disconnect()
 
         return _run_async(_test())
+
+    def preview_sync(self) -> list[dict]:
+        """Dry-run: list dialogs that would be synced with current filters."""
+        return _run_async(self._preview_async())
+
+    async def _preview_async(self) -> list[dict]:
+        client = self._client()
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise ValueError("Session expired. Please re-authenticate.")
+
+            me = await client.get_me()
+            my_id = me.id
+            since_dt = datetime.now(timezone.utc) - timedelta(days=DEFAULT_SYNC_DAYS)
+            results = []
+            dialog_num = 0
+
+            log.info("Preview: scanning dialogs (cutoff=%s)...", since_dt.strftime("%Y-%m-%d"))
+
+            async for dialog in client.iter_dialogs():
+                entity = dialog.entity
+                dialog_name = _entity_name(entity)
+                skip_reason = _should_skip_dialog(dialog, entity, since_dt)
+
+                if skip_reason:
+                    log.info("  Skip: %s (%s)", dialog_name, skip_reason)
+                    results.append({"name": dialog_name, "type": _dialog_type(entity),
+                                    "status": "skip", "reason": skip_reason, "messages": 0})
+                    continue
+
+                # Check if I ever replied (peek at a small sample)
+                i_replied = False
+                sample_count = 0
+                async for msg in client.iter_messages(dialog.id, limit=PREVIEW_SAMPLE_MESSAGES * 10):
+                    if msg.sender_id == my_id:
+                        i_replied = True
+                        break
+                    sample_count += 1
+
+                if not i_replied:
+                    log.info("  Skip: %s (never replied)", dialog_name)
+                    results.append({"name": dialog_name, "type": _dialog_type(entity),
+                                    "status": "skip", "reason": "never replied", "messages": 0})
+                    continue
+
+                # Count messages in window (capped for speed)
+                msg_count = 0
+                async for msg in client.iter_messages(
+                    dialog.id, offset_date=since_dt, limit=MAX_MESSAGES_PER_DIALOG
+                ):
+                    if msg.date.replace(tzinfo=timezone.utc) < since_dt:
+                        break
+                    msg_count += 1
+
+                dialog_num += 1
+                last_active = dialog.date.strftime("%Y-%m-%d") if dialog.date else "?"
+                log.info("  [%d] %s: ~%d messages (last: %s)",
+                         dialog_num, dialog_name, msg_count, last_active)
+                results.append({"name": dialog_name, "type": _dialog_type(entity),
+                                "status": "sync", "reason": "", "messages": msg_count,
+                                "last_active": last_active})
+
+            to_sync = [r for r in results if r["status"] == "sync"]
+            total_msgs = sum(r["messages"] for r in to_sync)
+            log.info("Preview complete: %d dialogs to sync, ~%d messages total, %d skipped",
+                     len(to_sync), total_msgs, len(results) - len(to_sync))
+            return results
+        finally:
+            await client.disconnect()
 
     def pull(self, cursor: str | None = None, since: str | None = None) -> PullResult:
         return _run_async(self._pull_async(cursor, since))
@@ -148,6 +270,7 @@ class TelegramPuller(BasePuller):
             items = []
             new_cursor_map = dict(cursor_map)
             total_dialogs = 0
+            skipped = 0
             total_messages = 0
 
             log.info("Starting Telegram sync (since=%s, cursor_dialogs=%d)",
@@ -158,9 +281,24 @@ class TelegramPuller(BasePuller):
                 dialog_id = str(dialog.id)
                 dialog_name = _entity_name(entity)
 
-                # Skip empty dialogs or those with no recent messages
-                if dialog.date and dialog.date.replace(tzinfo=timezone.utc) < since_dt:
+                # Apply filters
+                skip_reason = _should_skip_dialog(dialog, entity, since_dt)
+                if skip_reason:
+                    log.info("Skipped: %s (%s)", dialog_name, skip_reason)
+                    skipped += 1
                     continue
+
+                # For new dialogs (no cursor), check that I replied at least once
+                if dialog_id not in cursor_map:
+                    i_replied = False
+                    async for msg in client.iter_messages(dialog.id, limit=50):
+                        if msg.sender_id == my_id:
+                            i_replied = True
+                            break
+                    if not i_replied:
+                        log.info("Skipped: %s (never replied)", dialog_name)
+                        skipped += 1
+                        continue
 
                 total_dialogs += 1
                 min_id = int(cursor_map.get(dialog_id, 0))
@@ -193,8 +331,8 @@ class TelegramPuller(BasePuller):
                 if msg_count > 0:
                     log.info("[%d] %s: %d messages", total_dialogs, dialog_name, msg_count)
 
-            log.info("Telegram sync complete: %d dialogs, %d messages",
-                     total_dialogs, total_messages)
+            log.info("Telegram sync complete: %d dialogs, %d messages, %d skipped",
+                     total_dialogs, total_messages, skipped)
 
             return PullResult(
                 items=items,

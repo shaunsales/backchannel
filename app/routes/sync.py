@@ -54,6 +54,49 @@ def register(rt):
         except Exception as e:
             return alerts.error(f"Sync failed: {e}")
 
+    @rt("/sync/{service_id}/preview")
+    def post(service_id: str):
+        """Dry-run preview: show what would be synced without writing to DB."""
+        try:
+            puller = manager.get_puller(service_id)
+            if not hasattr(puller, "preview_sync"):
+                return alerts.warning(f"Preview not available for {service_id}")
+
+            results = puller.preview_sync()
+            to_sync = [r for r in results if r["status"] == "sync"]
+            skipped = [r for r in results if r["status"] == "skip"]
+
+            rows = []
+            for r in to_sync:
+                rows.append(Tr(
+                    Td(r["name"], cls="text-sm"),
+                    Td(Span(r["type"], cls="badge badge-sm badge-ghost"), cls="text-xs"),
+                    Td(str(r["messages"]), cls="font-mono text-sm"),
+                    Td(r.get("last_active", ""), cls="text-xs opacity-60"),
+                ))
+            for r in skipped:
+                rows.append(Tr(
+                    Td(r["name"], cls="text-sm opacity-40"),
+                    Td(Span(r["type"], cls="badge badge-sm badge-ghost opacity-40")),
+                    Td("—", cls="opacity-40"),
+                    Td(r["reason"], cls="text-xs opacity-40"),
+                ))
+
+            total_msgs = sum(r["messages"] for r in to_sync)
+            summary = f"Will sync {len(to_sync)} dialogs (~{total_msgs:,} messages). {len(skipped)} skipped."
+
+            return Div(
+                Div(alerts.success(summary), cls="mb-3"),
+                Table(
+                    Thead(Tr(Th("Dialog"), Th("Type"), Th("Messages"), Th("Info"))),
+                    Tbody(*rows),
+                    cls="table table-sm table-zebra",
+                ),
+                cls="overflow-x-auto",
+            )
+        except Exception as e:
+            return alerts.error(f"Preview failed: {e}")
+
     @rt("/sync/all")
     def post():
         db = get_db()

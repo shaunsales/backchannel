@@ -21,6 +21,16 @@ def telegram_auth_form(service: dict):
             ),
             Div(
                 Button(
+                    Span("Preview Sync", cls="sync-label"),
+                    Span("Scanning...", cls="loading loading-spinner loading-xs htmx-indicator"),
+                    hx_post="/sync/telegram/preview",
+                    hx_target="#telegram-auth-result",
+                    hx_swap="innerHTML",
+                    hx_indicator="closest button",
+                    hx_disabled_elt="this",
+                    cls="btn btn-outline btn-sm",
+                ),
+                Button(
                     Span("Sync Now", cls="sync-label"),
                     Span("Syncing...", cls="loading loading-spinner loading-xs htmx-indicator"),
                     hx_post="/sync/telegram",
