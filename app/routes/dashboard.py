@@ -38,11 +38,18 @@ def register(rt):
                 "SELECT service_id, COUNT(*) as cnt FROM items GROUP BY service_id"
             ).fetchall()
         }
+        doc_counts = {
+            r["service_id"]: r["cnt"]
+            for r in db.execute(
+                "SELECT service_id, COUNT(*) as cnt FROM documents WHERE hidden = 0 GROUP BY service_id"
+            ).fetchall()
+        }
 
         service_dicts = []
         for s in services:
             d = dict(s)
-            d["item_count"] = item_counts.get(d["id"], 0)
+            d["item_count"] = item_counts.get(d["id"], 0) + doc_counts.get(d["id"], 0)
+            d["last_sync_ago"] = _humanize_time(d["last_sync_at"]) if d["last_sync_at"] else "Never"
             service_dicts.append(d)
 
         recent_runs = db.execute(

@@ -23,7 +23,7 @@ def service_card(service):
     sid = service["id"]
     name = service["display_name"]
     status = service["status"]
-    last_sync = service["last_sync_at"] or "Never"
+    last_sync = service.get("last_sync_ago") or service["last_sync_at"] or "Never"
     item_count = service.get("item_count", 0)
     dot_cls = STATUS_DOT.get(status, "bg-base-content/20")
     _, status_label = STATUS_BADGE.get(status, ("badge-ghost", status))
@@ -66,13 +66,13 @@ def service_card(service):
             Div(cls="border-b border-base-content/5 my-3"),
             Div(
                 Div(
-                    Span("Items", cls="text-[11px] opacity-40"),
+                    Span("Stored", cls="text-[11px] opacity-40"),
                     Span(f"{item_count:,}", cls="text-sm font-mono font-semibold"),
                     cls="flex flex-col",
                 ),
                 Div(
                     Span("Last sync", cls="text-[11px] opacity-40"),
-                    Span(last_sync, cls="text-[11px] font-mono opacity-70"),
+                    Span(last_sync, cls="text-[11px] opacity-70"),
                     cls="flex flex-col",
                 ),
                 cls="flex gap-6 mb-3",

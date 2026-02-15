@@ -1,3 +1,4 @@
+from datetime import datetime
 from fasthtml.common import *
 from app.db import get_db
 from app.components.layout import page
@@ -27,7 +28,8 @@ def register(rt):
         doc_count = db.execute(
             "SELECT COUNT(*) as cnt FROM documents WHERE service_id = ? AND hidden = 0", (service_id,)
         ).fetchone()["cnt"]
-        s["item_count"] = item_count
+        s["item_count"] = item_count + doc_count
+        s["last_sync_ago"] = _humanize_time(s["last_sync_at"]) if s["last_sync_at"] else "Never"
 
         recent_runs = db.execute(
             "SELECT * FROM sync_runs WHERE service_id = ? ORDER BY started_at DESC LIMIT 5",
@@ -72,20 +74,18 @@ def register(rt):
                 cls="card bg-base-200/50 border border-base-content/5 mb-4",
             )
 
+        stored = item_count + doc_count
+        last_sync_display = s["last_sync_ago"]
+
         stats_row = Div(
             Div(
-                Span("Items", cls="text-[11px] opacity-40"),
-                Span(f"{item_count:,}", cls="text-lg font-mono font-semibold"),
+                Span("Stored", cls="text-[11px] opacity-40"),
+                Span(f"{stored:,}", cls="text-lg font-mono font-semibold"),
                 cls="flex flex-col",
             ),
             Div(
-                Span("Documents", cls="text-[11px] opacity-40"),
-                Span(f"{doc_count:,}", cls="text-lg font-mono font-semibold"),
-                cls="flex flex-col",
-            ) if doc_count > 0 else None,
-            Div(
                 Span("Last sync", cls="text-[11px] opacity-40"),
-                Span(last_sync[:16] if last_sync != "Never" else "Never", cls="text-xs font-mono opacity-70"),
+                Span(last_sync_display, cls="text-xs opacity-70"),
                 cls="flex flex-col",
             ),
             cls="flex gap-8 mb-4",
@@ -115,9 +115,14 @@ def register(rt):
         if service is None:
             return Div("Unknown service", cls="text-error text-sm")
         s = dict(service)
-        s["item_count"] = db.execute(
+        items = db.execute(
             "SELECT COUNT(*) as cnt FROM items WHERE service_id = ?", (service_id,)
         ).fetchone()["cnt"]
+        docs = db.execute(
+            "SELECT COUNT(*) as cnt FROM documents WHERE service_id = ? AND hidden = 0", (service_id,)
+        ).fetchone()["cnt"]
+        s["item_count"] = items + docs
+        s["last_sync_ago"] = _humanize_time(s["last_sync_at"]) if s["last_sync_at"] else "Never"
         return service_card(s)
 
 
@@ -139,3 +144,27 @@ def _runs_table(runs):
         Tbody(*rows),
         cls="table table-sm",
     )
+
+
+def _humanize_time(ts_str: str) -> str:
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        if ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
+        delta = datetime.utcnow() - ts
+        seconds = int(delta.total_seconds())
+        if seconds < 60:
+            return "Just now"
+        minutes = seconds // 60
+        if minutes < 60:
+            return f"{minutes} min{'s' if minutes != 1 else ''} ago"
+        hours = minutes // 60
+        if hours < 24:
+            return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        days = hours // 24
+        if days < 30:
+            return f"{days} day{'s' if days != 1 else ''} ago"
+        months = days // 30
+        return f"{months} month{'s' if months != 1 else ''} ago"
+    except (ValueError, TypeError):
+        return ts_str
