@@ -13,8 +13,7 @@ CUSTOM_CSS = Style("""
     .htmx-request .htmx-indicator { display: inline-flex; }
     .htmx-request .sync-label { display: none; }
     .htmx-request.htmx-request { opacity: 0.7; pointer-events: none; }
-    #log-panel { height: 240px; transition: height 0.2s ease; }
-    #log-panel.collapsed { height: 0 !important; overflow: hidden; border-top: none; }
+    #log-panel { transition: height 0.2s ease; overflow: hidden; }
     #log-panel .log-line { font-size: 11px; line-height: 1.6; font-family: ui-monospace, monospace; }
     #log-panel .log-line .log-ts { opacity: 0.3; }
     #log-panel .log-line .log-name { opacity: 0.5; color: oklch(var(--p)); }
@@ -37,13 +36,14 @@ LOG_PANEL_JS = NotStr("""<script>
         isOpen = !isOpen;
         var p = getPanel();
         if (!p) return;
-        p.classList.toggle('collapsed', !isOpen);
+        p.style.height = isOpen ? '240px' : '0px';
+        p.style.borderTopWidth = isOpen ? '1px' : '0px';
         if (isOpen && !evtSource) connectSSE();
         if (isOpen) {
             var b = getBadge();
             if (b) { b.style.display = 'none'; }
             lineCount = 0;
-            scrollToBottom();
+            setTimeout(scrollToBottom, 220);
         }
     };
 
@@ -235,7 +235,8 @@ def log_panel():
         ),
         Div(id="log-content", cls="px-4 py-2 overflow-y-auto", style="height: calc(100% - 36px)"),
         id="log-panel",
-        cls="collapsed fixed bottom-0 left-60 right-0 bg-base-200 border-t border-base-content/10 z-40",
+        cls="fixed bottom-0 left-60 right-0 bg-base-200 border-t border-base-content/10 z-40",
+        style="height: 0px; border-top-width: 0px",
     )
 
 
