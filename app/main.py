@@ -12,7 +12,7 @@ from app.pullers.telegram import TelegramPuller
 from app.services.manager import register_puller
 
 hdrs = head_tags()
-app, rt = fast_app(hdrs=hdrs, live=True)
+app, rt = fast_app(hdrs=hdrs, live=True, static_path="app/static", title="Backchannel")
 
 init_db()
 logstream.install()

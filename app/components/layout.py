@@ -108,13 +108,8 @@ LOG_PANEL_JS = NotStr("""<script>
 
 
 def logo(size=28):
-    return NotStr(f'''<svg width="{size}" height="{size}" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect width="32" height="32" rx="8" fill="oklch(var(--p))"/>
-        <path d="M8 11C8 9.89543 8.89543 9 10 9H22C23.1046 9 24 9.89543 24 11V17C24 18.1046 23.1046 19 22 19H18L14 23V19H10C8.89543 19 8 18.1046 8 17V11Z" fill="oklch(var(--pc))" opacity="0.9"/>
-        <circle cx="12.5" cy="14" r="1.5" fill="oklch(var(--p))"/>
-        <circle cx="16" cy="14" r="1.5" fill="oklch(var(--p))"/>
-        <circle cx="19.5" cy="14" r="1.5" fill="oklch(var(--p))"/>
-    </svg>''')
+    return Img(src="/b_logo.jpg", alt="Backchannel",
+               width=str(size), height=str(size), cls="rounded")
 
 
 SERVICE_ICONS = {
@@ -133,6 +128,9 @@ def head_tags():
         daisyui_css,
         tailwind_script,
         CUSTOM_CSS,
+        Link(rel="icon", type="image/x-icon", href="/favicon.ico"),
+        Link(rel="icon", type="image/png", sizes="32x32", href="/favicon-32x32.png"),
+        Link(rel="apple-touch-icon", sizes="180x180", href="/apple-touch-icon.png"),
         Title("Backchannel"),
     )
 
