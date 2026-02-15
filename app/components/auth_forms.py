@@ -46,6 +46,30 @@ def telegram_auth_form(service: dict):
     return Div(
         Form(
             Div(
+                Label("API ID", fr="tg-api-id", cls="label text-xs font-semibold"),
+                Input(
+                    type="text",
+                    name="api_id",
+                    id="tg-api-id",
+                    placeholder="12345678",
+                    cls="input input-bordered input-sm w-full font-mono",
+                    required=True,
+                ),
+                cls="mb-3",
+            ),
+            Div(
+                Label("API Hash", fr="tg-api-hash", cls="label text-xs font-semibold"),
+                Input(
+                    type="password",
+                    name="api_hash",
+                    id="tg-api-hash",
+                    placeholder="abcdef0123456789...",
+                    cls="input input-bordered input-sm w-full font-mono",
+                    required=True,
+                ),
+                cls="mb-3",
+            ),
+            Div(
                 Label("Phone Number", fr="tg-phone", cls="label text-xs font-semibold"),
                 Input(
                     type="tel",
@@ -56,10 +80,10 @@ def telegram_auth_form(service: dict):
                     required=True,
                 ),
                 P(
-                    "Get API credentials from ",
-                    A("my.telegram.org", href="https://my.telegram.org", target="_blank",
+                    "Get API ID and Hash from ",
+                    A("my.telegram.org/apps", href="https://my.telegram.org/apps", target="_blank",
                       cls="link link-primary"),
-                    ". Set TELEGRAM_API_ID and TELEGRAM_API_HASH in .env.",
+                    ".",
                     cls="text-[11px] opacity-40 mt-1",
                 ),
                 cls="mb-4",

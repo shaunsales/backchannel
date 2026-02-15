@@ -96,21 +96,32 @@ def register(rt):
     # ── Telegram Auth ────────────────────────────────────────────
 
     @rt("/auth/telegram/phone")
-    def post(phone: str):
+    def post(phone: str, api_id: str = "", api_hash: str = ""):
         from telethon.errors import FloodWaitError
         phone = phone.strip()
-        if not phone:
-            return Div(alerts.error("Phone number is required"), telegram_auth_form(manager.status("telegram")), id="telegram-auth-area")
+        api_id = api_id.strip()
+        api_hash = api_hash.strip()
+        if not phone or not api_id or not api_hash:
+            return Div(alerts.error("API ID, API Hash, and Phone number are all required."),
+                       telegram_auth_form(manager.status("telegram")), id="telegram-auth-area")
+
+        try:
+            api_id_int = int(api_id)
+        except ValueError:
+            return Div(alerts.error("API ID must be a number."),
+                       telegram_auth_form(manager.status("telegram")), id="telegram-auth-area")
 
         try:
             async def _send_code():
-                client = _get_client()
+                client = _get_client(api_id=api_id_int, api_hash=api_hash)
                 await client.connect()
                 result = await client.send_code_request(phone)
                 return client, result
 
             client, result = _run_async(_send_code())
             _tg_auth_state["phone"] = phone
+            _tg_auth_state["api_id"] = api_id_int
+            _tg_auth_state["api_hash"] = api_hash
             _tg_auth_state["phone_code_hash"] = result.phone_code_hash
             log.info("Telegram: code sent to %s", phone)
             return telegram_code_form(phone)
@@ -128,6 +139,8 @@ def register(rt):
         from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
         code = code.strip()
         phone_code_hash = _tg_auth_state.get("phone_code_hash")
+        api_id = _tg_auth_state.get("api_id", 0)
+        api_hash = _tg_auth_state.get("api_hash", "")
 
         if not phone_code_hash:
             return Div(alerts.error("Session expired. Please start over."),
@@ -135,7 +148,7 @@ def register(rt):
 
         try:
             async def _verify_code():
-                client = _get_client()
+                client = _get_client(api_id=api_id, api_hash=api_hash)
                 await client.connect()
                 await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
                 me = await client.get_me()
@@ -143,8 +156,11 @@ def register(rt):
                 return me
 
             me = _run_async(_verify_code())
-            # Success — save credentials and mark connected
-            manager.connect("telegram", {"phone": phone, "user_id": me.id, "username": me.username or ""})
+            # Success — save credentials (including api_id/hash) and mark connected
+            manager.connect("telegram", {
+                "phone": phone, "api_id": api_id, "api_hash": api_hash,
+                "user_id": me.id, "username": me.username or "",
+            })
             _tg_auth_state.clear()
             log.info("Telegram: authenticated as %s (id=%d)", me.username or phone, me.id)
             return telegram_auth_form(manager.status("telegram"))
@@ -164,9 +180,11 @@ def register(rt):
 
     @rt("/auth/telegram/password")
     def post(phone: str, password: str):
+        api_id = _tg_auth_state.get("api_id", 0)
+        api_hash = _tg_auth_state.get("api_hash", "")
         try:
             async def _verify_2fa():
-                client = _get_client()
+                client = _get_client(api_id=api_id, api_hash=api_hash)
                 await client.connect()
                 await client.sign_in(password=password)
                 me = await client.get_me()
@@ -174,7 +192,10 @@ def register(rt):
                 return me
 
             me = _run_async(_verify_2fa())
-            manager.connect("telegram", {"phone": phone, "user_id": me.id, "username": me.username or ""})
+            manager.connect("telegram", {
+                "phone": phone, "api_id": api_id, "api_hash": api_hash,
+                "user_id": me.id, "username": me.username or "",
+            })
             _tg_auth_state.clear()
             log.info("Telegram: 2FA complete, authenticated as %s", me.username or phone)
             return telegram_auth_form(manager.status("telegram"))

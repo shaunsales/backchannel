@@ -18,7 +18,7 @@ from telethon.tl.types import (
 )
 
 from app.pullers.base import BasePuller, PullResult
-from app.config import TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION_PATH
+from app.config import TELEGRAM_SESSION_PATH
 
 log = logging.getLogger(__name__)
 
@@ -35,11 +35,23 @@ def _run_async(coro):
         loop.close()
 
 
-def _get_client(session_path: str | None = None) -> TelegramClient:
-    """Create a Telethon client instance."""
+def _get_client(api_id: int = 0, api_hash: str = "", session_path: str | None = None) -> TelegramClient:
+    """Create a Telethon client instance. Reads credentials from args or DB."""
     path = session_path or TELEGRAM_SESSION_PATH
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    return TelegramClient(path, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+    if not api_id or not api_hash:
+        # Try loading from DB
+        import json
+        from app.db import get_db
+        db = get_db()
+        row = db.execute("SELECT credentials FROM services WHERE id = 'telegram'").fetchone()
+        if row:
+            creds = json.loads(row["credentials"] or "{}")
+            api_id = int(creds.get("api_id", 0))
+            api_hash = creds.get("api_hash", "")
+    if not api_id or not api_hash:
+        raise ValueError("Telegram API ID and Hash not configured. Please connect via the dashboard.")
+    return TelegramClient(path, api_id, api_hash)
 
 
 def _entity_name(entity) -> str:
@@ -84,9 +96,15 @@ def _media_summary(media) -> str | None:
 
 class TelegramPuller(BasePuller):
 
+    def _client(self):
+        return _get_client(
+            api_id=int(self.credentials.get("api_id", 0)),
+            api_hash=self.credentials.get("api_hash", ""),
+        )
+
     def test_connection(self) -> bool:
         async def _test():
-            client = _get_client()
+            client = self._client()
             try:
                 await client.connect()
                 if not await client.is_user_authorized():
@@ -103,7 +121,7 @@ class TelegramPuller(BasePuller):
         return _run_async(self._pull_async(cursor, since))
 
     async def _pull_async(self, cursor: str | None, since: str | None) -> PullResult:
-        client = _get_client()
+        client = self._client()
         try:
             await client.connect()
             if not await client.is_user_authorized():
