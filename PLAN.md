@@ -11,6 +11,16 @@ Core loop: Every morning at 06:00, Backchannel pulls everything new from all
 connected services, stores it in a unified items table, ready for AI agent
 ingestion.
 
+### Current Progress
+
+- **Foundation complete**: FastHTML app, SQLite schema, dashboard, layout, components
+- **Notion fully integrated**: API key auth, page sync with markdown conversion,
+  document versioning, content-hash dedup, incremental sync, deletion detection,
+  soft-delete (hide/unhide), responsive grid UI with text previews
+- **JSON API live**: endpoints for documents, items, search, and stats
+- **Remaining**: Telegram, Gmail, ProtonMail, WhatsApp pullers; daily sync
+  automation; sync history page; error handling & rate limiting
+
 
 ## Tech Stack
 
@@ -58,9 +68,11 @@ backchannel/
       __init__.py
       dashboard.py              GET /
       services.py               GET /services/SERVICE_ID and GET /services/SERVICE_ID/card
-      auth.py                   Auth flows per service
+      auth.py                   Auth flows per service (Notion implemented)
       sync.py                   POST /sync/SERVICE_ID and POST /sync/all
-      history.py                GET /history
+      docs.py                   GET /docs — document browser with grid, search, hide/unhide
+      api.py                    GET /api/* — JSON API for AI agent ingestion
+      history.py                GET /history (planned)
 
     pullers/                    Data pull engines, one per service
       __init__.py
@@ -165,14 +177,47 @@ An FTS5 virtual table mirroring the subject, body_plain, sender, and
 conversation columns from items. Kept in sync via insert/delete/update
 triggers. Enables instant full-text search across all services.
 
+### documents
+
+Notion pages are stored as full markdown documents in SQLite (not on disk).
+Each document holds the complete page content with content-hash dedup and
+version tracking.
+
+Fields: id, service_id, source_id, title, body_markdown, content_hash,
+version, hidden, metadata (JSON), source_ts, fetched_at, sync_run_id.
+UNIQUE(service_id, source_id).
+
+The `hidden` column (integer, default 0) enables soft-delete: hidden documents
+are greyed out in the UI and excluded from API results by default, but persist
+across syncs and can be unhidden at any time.
+
+Indexes on: service_id, source_ts descending.
+
+### document_versions
+
+Stores prior versions of documents when content changes. On each sync, if the
+content hash differs from the stored hash, the current content is snapshotted
+here before the document is updated.
+
+Fields: id, document_id (FK), version, body_markdown, content_hash, source_ts,
+created_at.
+
+Index on: document_id + version descending.
+
+### documents_fts
+
+FTS5 virtual table on title and body_markdown from documents. Kept in sync
+via insert/delete/update triggers. Enables full-text search across all pages.
+
 
 ## Service Details
 
 
-### 1. Notion
+### 1. Notion ✅ COMPLETE
 
 Library: notion-client
 Auth type: api_key
+Status: Fully implemented and working
 
 Auth flow:
   User creates an internal integration at notion.so/my-integrations and copies
@@ -181,22 +226,38 @@ Auth flow:
   integration from within Notion itself (this is a Notion requirement).
 
 Initial sync:
-  Use the search endpoint to discover all pages and databases the integration
-  can access. For each page, recursively fetch block children to get the full
-  content tree. For each database, query all rows. Use the
-  collect_paginated_api helper to handle pagination. Only sync items with
-  last_edited_time within the last 90 days.
+  Use the search endpoint to discover all pages the integration can access.
+  For each page, recursively fetch block children to get the full content tree
+  (max_depth configurable, default 5). Child pages and child databases are NOT
+  recursed into — they are fetched independently as standalone documents.
+  Pagination handled via start_cursor.
+
+Filters applied during sync:
+  - Skip archived or trashed pages
+  - Skip untitled pages (no title property)
+  - Skip pages with empty body content after markdown conversion
+  These filters reduced initial import from 172 to ~36 quality pages.
 
 Incremental sync:
-  Search with a filter on last_edited_time greater than the stored cursor.
-  Only re-fetch pages and databases that changed. Update cursor to current
-  timestamp after success.
+  Search returns all pages. Pages not edited since the stored cursor are
+  skipped for content re-download but still tracked for deletion detection.
+  All live source_ids are collected; any DB documents whose source_id is no
+  longer present are deleted (handles pages trashed in Notion).
+
+Soft-delete:
+  Documents can be hidden via the UI (hidden column). Hidden documents are
+  greyed out in the grid, sorted last, excluded from API by default, and
+  preserved across syncs (the hidden flag is never touched by sync logic).
 
 Normalization:
-  Pages become item_type "page" with the title as subject and block content
-  concatenated as body_plain. Database rows become item_type "db_row" with
-  properties stored in metadata. sender_is_me is always 1 since it is your
-  own workspace.
+  Pages become documents (not items) with full markdown content stored in
+  the body_markdown column. Block types converted: paragraphs, headings,
+  lists (bulleted, numbered, to-do), toggles, code blocks, quotes, callouts,
+  dividers, images, bookmarks, tables, child_page references.
+
+Performance:
+  Initial full sync: ~60 seconds for 36 pages.
+  Incremental sync: ~3 seconds (skips content download, still detects deletions).
 
 
 ### 2. Gmail
@@ -401,9 +462,33 @@ These return HTML fragments rather than full pages and are used by HTMX for
 in-place updates without page reloads:
 
   GET /services/SERVICE_ID/card     Returns just one service card (for polling)
-  POST /sync/SERVICE_ID             Triggers sync, returns updated card
+  POST /sync/SERVICE_ID             Triggers sync, returns updated card + result banner
   POST /sync/all                    Triggers all services, returns status banner
-  GET /history/table?page=N         Returns table rows for pagination
+  POST /docs/ID/hide                Hide a document, returns updated card
+  POST /docs/ID/unhide              Unhide a document, returns updated card
+  GET /history/table?page=N         Returns table rows for pagination (planned)
+
+
+### JSON API Endpoints
+
+All endpoints return JSON. Used for AI agent ingestion and programmatic access.
+
+  GET /api/stats                    Doc/item counts, service statuses
+  GET /api/documents                List docs (search, pagination, hidden filter)
+  GET /api/documents/ID             Single doc with full body + version history
+  GET /api/documents/ID/markdown    Raw markdown output (text/markdown)
+  GET /api/items                    List items (search, pagination, filters)
+  GET /api/items/ID                 Single item with full body
+  GET /api/search?q=...             Unified FTS search across docs and items
+
+Query parameters:
+  ?q=          Full-text search
+  ?limit=      Results per page (default 50)
+  ?offset=     Pagination offset
+  ?service=    Filter by service_id
+  ?item_type=  Filter by item type (email, message, page, db_row)
+  ?sender_is_me=1  Filter to items sent by the user
+  ?include_hidden=1  Include hidden documents
 
 
 ## Puller Architecture
@@ -477,46 +562,44 @@ Stored in .env, loaded by python-dotenv:
 
 ## Build Order
 
-Phase 1 - Foundation:
-  FastHTML app scaffold with main.py, config.py, db.py. Create the SQLite
-  schema and seed the 5 service rows. Build the layout component (page shell
-  with Backchannel branding, nav bar). Build the dashboard landing page with
-  5 placeholder service cards showing disconnected status. Verify it runs and
-  looks right on localhost:8787.
+Phase 1 - Foundation: ✅ COMPLETE
+  FastHTML app scaffold with main.py, config.py, db.py. SQLite schema with
+  services, sync_runs, items, documents tables. Layout with sidebar, service
+  cards, dashboard. Puller architecture with BasePuller and PullResult.
 
-Phase 2 - Telegram (easiest service):
+Phase 2 - Notion: ✅ COMPLETE (built before other services)
+  Full end-to-end: API key auth, recursive block→markdown, content-hash
+  versioning, incremental sync, deletion detection, soft-delete, document
+  browser with grid UI, text previews, hide/unhide.
+
+Phase 3 - JSON API: ✅ COMPLETE
+  /api/documents, /api/items, /api/search, /api/stats endpoints. Full-text
+  search, pagination, filtering, markdown output.
+
+Phase 4 - Telegram:
   Implement the Telegram puller. Build the phone number and code input forms
   on the service detail page. Test initial sync with a 90 day window. Test
-  incremental sync by message ID. Verify items land in the database and the
-  dashboard card updates with real counts.
+  incremental sync by message ID.
 
-Phase 3 - Gmail (most data):
+Phase 5 - Gmail:
   Implement the Gmail puller. Build the OAuth flow with browser redirect and
   callback handler. Handle token storage and refresh. Test initial sync with
-  a date query. Test incremental sync via the history endpoint. Parse email
-  bodies and attachment metadata.
+  a date query. Test incremental sync via the history endpoint.
 
-Phase 4 - ProtonMail:
+Phase 6 - ProtonMail:
   Implement the ProtonMail puller. Build the IMAP credential form. Test
   connection to Proton Bridge. Sync across all folders. Test incremental
   sync by UID.
 
-Phase 5 - Notion:
-  Implement the Notion puller. Build the API key input form. Handle recursive
-  block fetching and database row fetching. Handle pagination. Test
-  incremental sync by last_edited_time.
-
-Phase 6 - WhatsApp:
+Phase 7 - WhatsApp:
   Build or download the whatsapp-bridge Go binary. Implement bridge process
-  management (start, stop, health check). Build the QR code display with HTMX
-  polling. Implement the puller that reads from the bridge SQLite database.
-  Test incremental sync by rowid.
+  management. Build the QR code display with HTMX polling. Implement the
+  puller that reads from the bridge SQLite database.
 
-Phase 7 - Polish:
+Phase 8 - Polish:
   Sync history page with filtering and pagination. Error handling and retry
-  logic in pullers. Rate limit handling (Gmail quotas, Telegram flood waits,
-  Notion rate limits). Logging improvements. The setup.sh script. All three
-  launchd plist files. README with full setup instructions.
+  logic in pullers. Rate limit handling. Daily sync automation with launchd.
+  Setup script. README.
 
 
 ## Open Questions
@@ -537,7 +620,9 @@ Phase 7 - Polish:
    complexity. Start with sequential fetches and optimize later if needed.
 
 5. Notion content depth: how many levels deep to recurse into nested blocks.
-   Suggest a configurable max_depth defaulting to 5 levels.
+   RESOLVED: max_depth defaults to 5, configurable via service config.
+   Child pages/databases are NOT recursed into — they are independently
+   fetched as standalone documents.
 
 6. Rate limiting: Gmail has quota limits, Telegram has flood wait limits,
    Notion has rate limits. Each puller should implement basic backoff and
