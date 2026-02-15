@@ -13,8 +13,8 @@ CUSTOM_CSS = Style("""
     .htmx-request .htmx-indicator { display: inline-flex; }
     .htmx-request .sync-label { display: none; }
     .htmx-request.htmx-request { opacity: 0.7; pointer-events: none; }
-    #log-panel { transition: height 0.2s ease; }
-    #log-panel.collapsed { height: 0; overflow: hidden; border-top: none; }
+    #log-panel { height: 240px; transition: height 0.2s ease; }
+    #log-panel.collapsed { height: 0 !important; overflow: hidden; border-top: none; }
     #log-panel .log-line { font-size: 11px; line-height: 1.6; font-family: ui-monospace, monospace; }
     #log-panel .log-line .log-ts { opacity: 0.3; }
     #log-panel .log-line .log-name { opacity: 0.5; color: oklch(var(--p)); }
@@ -236,7 +236,6 @@ def log_panel():
         Div(id="log-content", cls="px-4 py-2 overflow-y-auto", style="height: calc(100% - 36px)"),
         id="log-panel",
         cls="collapsed fixed bottom-0 left-60 right-0 bg-base-200 border-t border-base-content/10 z-40",
-        style="height: 240px",
     )
 
 
