@@ -5,7 +5,7 @@ from fasthtml.common import *
 from app.config import DASHBOARD_PORT
 from app.db import init_db
 from app.components.layout import head_tags
-from app.routes import dashboard, services, sync, auth, docs, api, history
+from app.routes import dashboard, services, sync, auth, docs, api, history, messages
 from app import logstream
 from app.pullers.notion import NotionPuller
 from app.pullers.telegram import TelegramPuller
@@ -26,6 +26,7 @@ auth.register(rt)
 docs.register(rt)
 api.register(rt)
 history.register(rt)
+messages.register(rt)
 
 
 if __name__ == "__main__":

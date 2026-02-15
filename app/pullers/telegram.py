@@ -26,6 +26,10 @@ DEFAULT_SYNC_DAYS = 365
 MAX_MESSAGES_PER_DIALOG = 200
 PREVIEW_SAMPLE_MESSAGES = 5  # messages to peek at per dialog during preview
 
+# Rate limiting — proactive delays to avoid Telegram FloodWaitError
+DELAY_BETWEEN_DIALOGS = 1.0    # seconds between processing each dialog
+DELAY_AFTER_REPLY_CHECK = 0.5  # seconds after checking if user replied
+
 
 def _run_async(coro):
     """Run an async coroutine from sync code, safe even inside an existing event loop."""
@@ -207,6 +211,7 @@ class TelegramPuller(BasePuller):
                         i_replied = True
                         break
                     sample_count += 1
+                await asyncio.sleep(DELAY_AFTER_REPLY_CHECK)
 
                 if not i_replied:
                     log.info("  Skip: %s (never replied)", dialog_name)
@@ -217,12 +222,13 @@ class TelegramPuller(BasePuller):
                 # Count messages in window (capped for speed)
                 msg_count = 0
                 async for msg in client.iter_messages(
-                    dialog.id, offset_date=since_dt, limit=MAX_MESSAGES_PER_DIALOG
+                    dialog.id, limit=MAX_MESSAGES_PER_DIALOG
                 ):
                     if msg.date.replace(tzinfo=timezone.utc) < since_dt:
                         break
                     msg_count += 1
 
+                await asyncio.sleep(DELAY_BETWEEN_DIALOGS)
                 dialog_num += 1
                 last_active = dialog.date.strftime("%Y-%m-%d") if dialog.date else "?"
                 log.info("  [%d] %s: ~%d messages (last: %s)",
@@ -295,6 +301,7 @@ class TelegramPuller(BasePuller):
                         if msg.sender_id == my_id:
                             i_replied = True
                             break
+                    await asyncio.sleep(DELAY_AFTER_REPLY_CHECK)
                     if not i_replied:
                         log.info("Skipped: %s (never replied)", dialog_name)
                         skipped += 1
@@ -310,7 +317,6 @@ class TelegramPuller(BasePuller):
                 async for message in client.iter_messages(
                     dialog.id,
                     min_id=min_id,
-                    offset_date=since_dt if not min_id else None,
                     limit=MAX_MESSAGES_PER_DIALOG,
                 ):
                     if message.date.replace(tzinfo=timezone.utc) < since_dt:
@@ -330,6 +336,8 @@ class TelegramPuller(BasePuller):
 
                 if msg_count > 0:
                     log.info("[%d] %s: %d messages", total_dialogs, dialog_name, msg_count)
+
+                await asyncio.sleep(DELAY_BETWEEN_DIALOGS)
 
             log.info("Telegram sync complete: %d dialogs, %d messages, %d skipped",
                      total_dialogs, total_messages, skipped)
