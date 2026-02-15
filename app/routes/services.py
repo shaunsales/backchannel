@@ -3,12 +3,13 @@ from fasthtml.common import *
 from app.db import get_db
 from app.components.layout import page
 from app.components.service_card import service_card
-from app.components.auth_forms import notion_auth_form
+from app.components.auth_forms import notion_auth_form, telegram_auth_form
 from app.components import alerts
 
 
 AUTH_FORMS = {
     "notion": notion_auth_form,
+    "telegram": telegram_auth_form,
 }
 
 

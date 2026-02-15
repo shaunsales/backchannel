@@ -18,6 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from app.db import init_db, get_db
 from app.services.manager import register_puller, run_sync
 from app.pullers.notion import NotionPuller
+from app.pullers.telegram import TelegramPuller
 
 # Configure logging
 LOG_DIR = PROJECT_ROOT / "data" / "logs"
@@ -39,6 +40,7 @@ def main():
 
     init_db()
     register_puller("notion", NotionPuller)
+    register_puller("telegram", TelegramPuller)
 
     db = get_db()
     services = db.execute(

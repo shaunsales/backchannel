@@ -8,6 +8,7 @@ from app.components.layout import head_tags
 from app.routes import dashboard, services, sync, auth, docs, api, history
 from app import logstream
 from app.pullers.notion import NotionPuller
+from app.pullers.telegram import TelegramPuller
 from app.services.manager import register_puller
 
 hdrs = head_tags()
@@ -16,6 +17,7 @@ app, rt = fast_app(hdrs=hdrs, live=True)
 init_db()
 logstream.install()
 register_puller("notion", NotionPuller)
+register_puller("telegram", TelegramPuller)
 
 dashboard.register(rt)
 services.register(rt)
