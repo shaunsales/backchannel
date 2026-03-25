@@ -5,21 +5,24 @@ from fasthtml.common import *
 from app.config import DASHBOARD_PORT
 from app.db import init_db
 from app.components.layout import head_tags
-from app.routes import dashboard, services, sync, auth, docs, api, history, messages
+from app.routes import dashboard, services, sync, auth, docs, api, history, messages, accounts
 from app import logstream
 from app.pullers.notion import NotionPuller
 from app.pullers.telegram import TelegramPuller
+from app.pullers.gmail import GmailPuller
 from app.services.manager import register_puller
 
 hdrs = head_tags()
-app, rt = fast_app(hdrs=hdrs, live=True, static_path="app/static", title="Backchannel")
+app, rt = fast_app(hdrs=hdrs, live=False, static_path="app/static", title="Backchannel")
 
 init_db()
 logstream.install()
 register_puller("notion", NotionPuller)
 register_puller("telegram", TelegramPuller)
+register_puller("gmail", GmailPuller)
 
 dashboard.register(rt)
+accounts.register(rt)
 services.register(rt)
 sync.register(rt)
 auth.register(rt)

@@ -21,13 +21,14 @@ STATUS_DOT = {
 
 def service_card(service):
     sid = service["id"]
+    svc_type = service.get("service_type") or sid
     name = service["display_name"]
     status = service["status"]
     last_sync = service.get("last_sync_ago") or service["last_sync_at"] or "Never"
     item_count = service.get("item_count", 0)
     dot_cls = STATUS_DOT.get(status, "bg-base-content/20")
     _, status_label = STATUS_BADGE.get(status, ("badge-ghost", status))
-    icon_svg = SERVICE_ICONS.get(sid, "")
+    icon_svg = SERVICE_ICONS.get(svc_type, "")
 
     if status == "connected":
         action = Button(
@@ -41,7 +42,7 @@ def service_card(service):
     else:
         action = A(
             "Connect",
-            href=f"/services/{sid}",
+            href=f"/accounts/{sid}",
             cls="btn btn-ghost btn-xs h-7 min-h-0 border border-base-content/10",
         )
 

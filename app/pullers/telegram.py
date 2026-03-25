@@ -49,16 +49,22 @@ def _run_async(coro):
         loop.close()
 
 
-def _get_client(api_id: int = 0, api_hash: str = "", session_path: str | None = None) -> TelegramClient:
+def _get_client(api_id: int = 0, api_hash: str = "", session_path: str | None = None,
+                service_id: str = "telegram") -> TelegramClient:
     """Create a Telethon client instance. Reads credentials from args or DB."""
-    path = session_path or TELEGRAM_SESSION_PATH
+    if not session_path:
+        # Per-instance session file: data/sessions/{service_id}.session
+        sessions_dir = Path(TELEGRAM_SESSION_PATH).parent
+        path = str(sessions_dir / service_id)
+    else:
+        path = session_path
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     if not api_id or not api_hash:
         # Try loading from DB
         import json
         from app.db import get_db
         db = get_db()
-        row = db.execute("SELECT credentials FROM services WHERE id = 'telegram'").fetchone()
+        row = db.execute("SELECT credentials FROM services WHERE id = ?", (service_id,)).fetchone()
         if row:
             creds = json.loads(row["credentials"] or "{}")
             api_id = int(creds.get("api_id", 0))
@@ -156,6 +162,7 @@ class TelegramPuller(BasePuller):
         return _get_client(
             api_id=int(self.credentials.get("api_id", 0)),
             api_hash=self.credentials.get("api_hash", ""),
+            service_id=self.service_id,
         )
 
     def test_connection(self) -> bool:
@@ -258,29 +265,42 @@ class TelegramPuller(BasePuller):
             me = await client.get_me()
             my_id = me.id
 
+            # Parse cursor: {"dialogs": {dialog_id: last_msg_id}, "last_sync_ts": "..."}
+            cursor_map = {}
+            last_sync_ts = None
+            if cursor:
+                try:
+                    cursor_data = json.loads(cursor)
+                    # Support both old format (flat dict) and new format
+                    if "dialogs" in cursor_data:
+                        cursor_map = cursor_data["dialogs"]
+                        last_sync_ts = cursor_data.get("last_sync_ts")
+                    else:
+                        cursor_map = cursor_data  # legacy flat format
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
             # Determine time window
             if since:
                 since_dt = datetime.fromisoformat(since).replace(tzinfo=timezone.utc)
+            elif last_sync_ts:
+                # Incremental: only look at dialogs active since last sync
+                since_dt = datetime.fromisoformat(last_sync_ts).replace(tzinfo=timezone.utc)
             else:
                 days = self.config.get("sync_days", DEFAULT_SYNC_DAYS)
                 since_dt = datetime.now(timezone.utc) - timedelta(days=days)
 
-            # Parse cursor: JSON dict of {dialog_id: last_message_id}
-            cursor_map = {}
-            if cursor:
-                try:
-                    cursor_map = json.loads(cursor)
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            is_incremental = bool(cursor_map)
 
             items = []
             new_cursor_map = dict(cursor_map)
             total_dialogs = 0
             skipped = 0
+            unchanged = 0
             total_messages = 0
 
-            log.info("Starting Telegram sync (since=%s, cursor_dialogs=%d)",
-                     since_dt.strftime("%Y-%m-%d"), len(cursor_map))
+            log.info("Starting Telegram sync (since=%s, cursor_dialogs=%d, incremental=%s)",
+                     since_dt.strftime("%Y-%m-%d"), len(cursor_map), is_incremental)
 
             async for dialog in client.iter_dialogs():
                 entity = dialog.entity
@@ -290,9 +310,16 @@ class TelegramPuller(BasePuller):
                 # Apply filters
                 skip_reason = _should_skip_dialog(dialog, entity, since_dt)
                 if skip_reason:
-                    log.info("Skipped: %s (%s)", dialog_name, skip_reason)
                     skipped += 1
                     continue
+
+                # Incremental: skip dialogs with no new messages since last sync
+                if is_incremental and dialog_id in cursor_map:
+                    last_synced_id = int(cursor_map[dialog_id])
+                    latest_msg_id = dialog.message.id if dialog.message else 0
+                    if latest_msg_id <= last_synced_id:
+                        unchanged += 1
+                        continue
 
                 # For new dialogs (no cursor), check that I replied at least once
                 if dialog_id not in cursor_map:
@@ -339,12 +366,17 @@ class TelegramPuller(BasePuller):
 
                 await asyncio.sleep(DELAY_BETWEEN_DIALOGS)
 
-            log.info("Telegram sync complete: %d dialogs, %d messages, %d skipped",
-                     total_dialogs, total_messages, skipped)
+            log.info("Telegram sync complete: %d dialogs fetched, %d messages, %d skipped, %d unchanged",
+                     total_dialogs, total_messages, skipped, unchanged)
+
+            new_cursor = json.dumps({
+                "dialogs": new_cursor_map,
+                "last_sync_ts": datetime.now(timezone.utc).isoformat(),
+            })
 
             return PullResult(
                 items=items,
-                new_cursor=json.dumps(new_cursor_map),
+                new_cursor=new_cursor,
                 items_new=total_messages,
             )
         finally:

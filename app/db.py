@@ -21,7 +21,23 @@ def get_db():
 def init_db():
     db = get_db()
     db.executescript(SCHEMA_SQL)
+
+    # Migration: add service_type column if missing (for existing DBs)
+    cols = [r[1] for r in db.execute("PRAGMA table_info(services)").fetchall()]
+    if "service_type" not in cols:
+        db.execute("ALTER TABLE services ADD COLUMN service_type TEXT NOT NULL DEFAULT ''")
+        db.execute("UPDATE services SET service_type = id WHERE service_type = ''")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_services_type ON services(service_type)")
+    # Ensure index exists even for fresh DBs (not just migrations)
+    db.execute("CREATE INDEX IF NOT EXISTS idx_services_type ON services(service_type)")
+    db.commit()
+
+    # Seed (now safe — service_type column guaranteed to exist)
     db.executescript(SEED_SQL)
+
+    # Backfill any rows with empty service_type
+    db.execute("UPDATE services SET service_type = id WHERE service_type = ''")
+
     # Mark any stale "running" sync runs as failed (from prior crash/restart)
     db.execute(
         "UPDATE sync_runs SET status='failed', error_message='Server restarted', "
@@ -33,6 +49,7 @@ def init_db():
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS services (
     id            TEXT PRIMARY KEY,
+    service_type  TEXT NOT NULL DEFAULT '',
     display_name  TEXT NOT NULL,
     status        TEXT NOT NULL DEFAULT 'disconnected',
     auth_type     TEXT NOT NULL,
@@ -167,10 +184,10 @@ END;
 """
 
 SEED_SQL = """
-INSERT OR IGNORE INTO services (id, display_name, auth_type) VALUES
-    ('notion',     'Notion',     'api_key'),
-    ('gmail',      'Gmail',      'oauth2'),
-    ('telegram',   'Telegram',   'phone_code'),
-    ('protonmail', 'ProtonMail', 'imap_login'),
-    ('whatsapp',   'WhatsApp',   'qr_link');
+INSERT OR IGNORE INTO services (id, service_type, display_name, auth_type) VALUES
+    ('notion',     'notion',     'Notion',     'api_key'),
+    ('gmail',      'gmail',      'Gmail',      'app_password'),
+    ('telegram',   'telegram',   'Telegram',   'phone_code'),
+    ('protonmail', 'protonmail', 'ProtonMail', 'imap_login'),
+    ('whatsapp',   'whatsapp',   'WhatsApp',   'qr_link');
 """

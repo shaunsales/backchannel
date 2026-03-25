@@ -54,9 +54,11 @@ def register(rt):
 
         total = total_row["cnt"]
 
-        # Get service counts for filter pills
+        # Get service counts for filter pills (join to get display_name and service_type)
         svc_counts = db.execute("""
-            SELECT service_id, COUNT(*) as cnt FROM items GROUP BY service_id ORDER BY cnt DESC
+            SELECT i.service_id, s.service_type, s.display_name, COUNT(*) as cnt
+            FROM items i JOIN services s ON s.id = i.service_id
+            GROUP BY i.service_id ORDER BY cnt DESC
         """).fetchall()
 
         # Get conversation list for the selected service
@@ -77,10 +79,12 @@ def register(rt):
         ]
         for sc in svc_counts:
             sid = sc["service_id"]
+            svc_type = sc["service_type"] or sid
+            label = sc["display_name"] or sid.title()
             active = "btn-primary" if service == sid else "btn-ghost"
-            icon = NotStr(SERVICE_ICONS.get(sid, ""))
+            icon = NotStr(SERVICE_ICONS.get(svc_type, ""))
             pills.append(
-                A(icon, Span(f"{sid.title()} ({sc['cnt']:,})"),
+                A(icon, Span(f"{label} ({sc['cnt']:,})"),
                   href=_filter_url(q=q, service=sid),
                   cls=f"btn btn-xs {active} gap-1"),
             )

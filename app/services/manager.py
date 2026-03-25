@@ -7,11 +7,11 @@ from app.db import get_db
 log = logging.getLogger(__name__)
 
 
-PULLER_REGISTRY = {}
+PULLER_REGISTRY = {}  # keyed by service_type (e.g. "gmail", "telegram")
 
 
-def register_puller(service_id: str, puller_cls):
-    PULLER_REGISTRY[service_id] = puller_cls
+def register_puller(service_type: str, puller_cls):
+    PULLER_REGISTRY[service_type] = puller_cls
 
 
 def get_puller(service_id: str):
@@ -20,9 +20,10 @@ def get_puller(service_id: str):
     if row is None:
         raise ValueError(f"Unknown service: {service_id}")
 
-    puller_cls = PULLER_REGISTRY.get(service_id)
+    svc_type = row["service_type"] or service_id
+    puller_cls = PULLER_REGISTRY.get(svc_type)
     if puller_cls is None:
-        raise ValueError(f"No puller registered for: {service_id}")
+        raise ValueError(f"No puller registered for type: {svc_type}")
 
     credentials = json.loads(row["credentials"] or "{}")
     config = json.loads(row["config"] or "{}")
@@ -49,6 +50,64 @@ def disconnect(service_id: str):
     db.commit()
 
 
+def add_service_instance(service_type: str, display_name: str) -> str:
+    """Create a new service instance of the given type. Returns the new service ID."""
+    db = get_db()
+    # Look up auth_type from existing instance of this type
+    existing = db.execute(
+        "SELECT auth_type FROM services WHERE service_type = ? LIMIT 1", (service_type,)
+    ).fetchone()
+    if existing is None:
+        raise ValueError(f"Unknown service type: {service_type}")
+    auth_type = existing["auth_type"]
+
+    # Generate next ID: count existing instances of this type
+    count = db.execute(
+        "SELECT COUNT(*) as cnt FROM services WHERE service_type = ?", (service_type,)
+    ).fetchone()["cnt"]
+    new_id = f"{service_type}-{count + 1}"
+
+    now = datetime.now(timezone.utc).isoformat()
+    db.execute(
+        "INSERT INTO services (id, service_type, display_name, auth_type, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (new_id, service_type, display_name, auth_type, now, now),
+    )
+    db.commit()
+    log.info("Added service instance: %s (%s) as %s", display_name, service_type, new_id)
+    return new_id
+
+
+def remove_service_instance(service_id: str):
+    """Remove a service instance and all its data. Cannot remove the base instance."""
+    db = get_db()
+    row = db.execute("SELECT * FROM services WHERE id = ?", (service_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"Unknown service: {service_id}")
+    # Prevent removing the base service instance (id == service_type)
+    if service_id == row["service_type"]:
+        raise ValueError(f"Cannot remove the base {service_id} service. Disconnect it instead.")
+    # Delete related data
+    db.execute("DELETE FROM items WHERE service_id = ?", (service_id,))
+    db.execute("DELETE FROM document_versions WHERE document_id IN (SELECT id FROM documents WHERE service_id = ?)", (service_id,))
+    db.execute("DELETE FROM documents WHERE service_id = ?", (service_id,))
+    db.execute("DELETE FROM sync_runs WHERE service_id = ?", (service_id,))
+    db.execute("DELETE FROM services WHERE id = ?", (service_id,))
+    db.commit()
+    log.info("Removed service instance: %s", service_id)
+
+
+def rename_service(service_id: str, display_name: str):
+    """Rename a service instance."""
+    db = get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    db.execute(
+        "UPDATE services SET display_name = ?, updated_at = ? WHERE id = ?",
+        (display_name, now, service_id),
+    )
+    db.commit()
+
+
 def test(service_id: str) -> tuple[bool, str]:
     try:
         puller = get_puller(service_id)
@@ -62,6 +121,22 @@ def status(service_id: str) -> dict | None:
     db = get_db()
     row = db.execute("SELECT * FROM services WHERE id = ?", (service_id,)).fetchone()
     return dict(row) if row else None
+
+
+def clear_data(service_id: str):
+    """Delete all synced data for a service (items, docs, runs) but keep credentials."""
+    db = get_db()
+    row = db.execute("SELECT * FROM services WHERE id = ?", (service_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"Unknown service: {service_id}")
+    db.execute("DELETE FROM items WHERE service_id = ?", (service_id,))
+    db.execute("DELETE FROM document_versions WHERE document_id IN (SELECT id FROM documents WHERE service_id = ?)", (service_id,))
+    db.execute("DELETE FROM documents WHERE service_id = ?", (service_id,))
+    db.execute("DELETE FROM sync_runs WHERE service_id = ?", (service_id,))
+    now = datetime.now(timezone.utc).isoformat()
+    db.execute("UPDATE services SET sync_cursor = NULL, last_sync_at = NULL, updated_at = ? WHERE id = ?", (now, service_id))
+    db.commit()
+    log.info("Cleared all data for service: %s", service_id)
 
 
 def run_sync(service_id: str, run_type: str = "manual") -> dict:

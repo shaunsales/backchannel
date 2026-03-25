@@ -1,8 +1,13 @@
+import json
+import asyncio
+import threading
+from starlette.responses import StreamingResponse
 from fasthtml.common import *
 from app.db import get_db
 from app.services import manager
 from app.components.service_card import service_card
 from app.components import alerts
+from app import logstream
 
 
 def register(rt):
@@ -116,3 +121,97 @@ def register(rt):
                 results.append(f"{s['display_name']}: failed — {e}")
 
         return alerts.success("Sync complete: " + "; ".join(results))
+
+    @rt("/sync/{service_id}/stream")
+    async def get(service_id: str):
+        """SSE endpoint: runs sync in a background thread and streams log lines."""
+        db = get_db()
+        service = db.execute("SELECT * FROM services WHERE id = ?", (service_id,)).fetchone()
+        if service is None:
+            return alerts.error(f"Unknown service: {service_id}")
+
+        queue: asyncio.Queue = asyncio.Queue()
+        done_event = asyncio.Event()
+        result_holder = {}
+
+        def on_log(entry):
+            try:
+                queue.put_nowait(entry)
+            except asyncio.QueueFull:
+                pass
+
+        def run_sync():
+            try:
+                r = manager.run_sync(service_id, run_type="manual")
+                from app.db import get_db as _get_db
+                _db = _get_db()
+                run = _db.execute(
+                    "SELECT items_fetched, items_new, items_updated, duration_sec FROM sync_runs WHERE id = ?",
+                    (r["run_id"],)
+                ).fetchone()
+                deleted = r.get("docs_deleted", 0)
+                fetched = run["items_fetched"]
+                new = run["items_new"]
+                updated = run["items_updated"]
+                duration = run["duration_sec"]
+
+                if not fetched and not new and not updated and not deleted:
+                    msg = f"All up to date"
+                    if duration:
+                        msg += f" ({duration:.1f}s)"
+                    result_holder["status"] = "success"
+                    result_holder["message"] = msg
+                else:
+                    parts = []
+                    if fetched:
+                        parts.append(f"{fetched} fetched")
+                    if new:
+                        parts.append(f"{new} new")
+                    if updated:
+                        parts.append(f"{updated} updated")
+                    if deleted:
+                        parts.append(f"{deleted} removed")
+                    if duration:
+                        parts.append(f"{duration:.1f}s")
+                    result_holder["status"] = "success"
+                    result_holder["message"] = f"Sync complete — {', '.join(parts)}"
+            except Exception as e:
+                result_holder["status"] = "error"
+                result_holder["message"] = f"Sync failed: {e}"
+            finally:
+                done_event.set()
+
+        logstream.subscribe(on_log)
+
+        async def event_generator():
+            try:
+                # Start sync in background thread
+                thread = threading.Thread(target=run_sync, daemon=True)
+                thread.start()
+
+                yield f"data: {json.dumps({'type': 'start', 'msg': 'Starting sync...'})}\n\n"
+
+                while not done_event.is_set():
+                    try:
+                        entry = await asyncio.wait_for(queue.get(), timeout=0.5)
+                        yield f"data: {json.dumps({'type': 'log', 'msg': entry['msg'], 'level': entry['level']})}\n\n"
+                    except asyncio.TimeoutError:
+                        pass
+
+                # Drain remaining log entries
+                while not queue.empty():
+                    try:
+                        entry = queue.get_nowait()
+                        yield f"data: {json.dumps({'type': 'log', 'msg': entry['msg'], 'level': entry['level']})}\n\n"
+                    except asyncio.QueueEmpty:
+                        break
+
+                yield f"data: {json.dumps({'type': 'done', 'status': result_holder.get('status', 'error'), 'msg': result_holder.get('message', 'Unknown error')})}\n\n"
+            finally:
+                logstream.unsubscribe(on_log)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
