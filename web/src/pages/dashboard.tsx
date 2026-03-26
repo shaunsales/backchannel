@@ -80,7 +80,7 @@ export default function DashboardPage() {
         {data.accounts.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No connected accounts.{" "}
-            <Link to="/accounts/add" className="text-primary hover:underline">
+            <Link to="/accounts" className="text-primary hover:underline">
               Add one.
             </Link>
           </p>

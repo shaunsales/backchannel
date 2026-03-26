@@ -1,7 +1,3 @@
-.web
-*.db
-assets/external/
-.states
 # Python
 __pycache__/
 *.py[cod]
@@ -27,8 +23,9 @@ data/logs/
 # WhatsApp bridge
 whatsapp-bridge/
 
-# FastHTML
-.sesskey
+# Frontend
+web/node_modules/
+web/dist/
 
 # macOS
 .DS_Store
@@ -36,5 +33,6 @@ whatsapp-bridge/
 # IDE
 .vscode/
 .idea/
+.windsurf/
 *.swp
 *.swo
