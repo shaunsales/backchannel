@@ -30,6 +30,26 @@ def init_db():
         db.execute("CREATE INDEX IF NOT EXISTS idx_services_type ON services(service_type)")
     # Ensure index exists even for fresh DBs (not just migrations)
     db.execute("CREATE INDEX IF NOT EXISTS idx_services_type ON services(service_type)")
+
+    # Migration: add thread_id column if missing (for existing DBs)
+    item_cols = [r[1] for r in db.execute("PRAGMA table_info(items)").fetchall()]
+    if "thread_id" not in item_cols:
+        db.execute("ALTER TABLE items ADD COLUMN thread_id TEXT")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_items_thread ON items(thread_id)")
+        # Backfill thread_id for existing Telegram messages from metadata.chat_id
+        import json as _json
+        rows = db.execute("SELECT id, service_id, metadata FROM items WHERE thread_id IS NULL").fetchall()
+        for r in rows:
+            meta = _json.loads(r["metadata"] or "{}")
+            svc = r["service_id"]
+            tid = None
+            if "telegram" in svc and meta.get("chat_id"):
+                tid = f"telegram:{meta['chat_id']}"
+            elif "gmail" in svc and meta.get("gmail_thread_id"):
+                tid = f"gmail:{meta['gmail_thread_id']}"
+            if tid:
+                db.execute("UPDATE items SET thread_id = ? WHERE id = ?", (tid, r["id"]))
+
     db.commit()
 
     # Seed (now safe — service_type column guaranteed to exist)
@@ -83,6 +103,7 @@ CREATE TABLE IF NOT EXISTS items (
     service_id   TEXT NOT NULL REFERENCES services(id),
     item_type    TEXT NOT NULL,
     source_id    TEXT NOT NULL,
+    thread_id    TEXT,
     conversation TEXT,
     sender       TEXT,
     sender_is_me INTEGER DEFAULT 0,
@@ -103,6 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_items_service    ON items(service_id);
 CREATE INDEX IF NOT EXISTS idx_items_source_ts  ON items(source_ts DESC);
 CREATE INDEX IF NOT EXISTS idx_items_type       ON items(item_type);
 CREATE INDEX IF NOT EXISTS idx_items_me_ts      ON items(sender_is_me, source_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_items_thread    ON items(thread_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
     subject, body_plain, sender, conversation,

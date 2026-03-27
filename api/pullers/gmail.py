@@ -8,6 +8,7 @@ import email.header
 from datetime import datetime, timezone, timedelta
 
 from api.pullers.base import BasePuller, PullResult
+from api.content import process_content
 
 log = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ GMAIL_IMAP_HOST = "imap.gmail.com"
 GMAIL_IMAP_PORT = 993
 
 DEFAULT_SYNC_DAYS = 365
-MAX_MESSAGES = 5000
+DEFAULT_MAX_MESSAGES = 100
 
 
 def _imap_connect(email_addr: str, app_password: str) -> imaplib.IMAP4_SSL:
@@ -92,7 +93,7 @@ def _get_body(msg: email.message.Message) -> tuple[str, str]:
 
 
 def _get_attachments(msg: email.message.Message) -> list[dict]:
-    """Extract attachment metadata from an email message."""
+    """Extract attachment metadata (no binary content) from an email message."""
     attachments = []
     if not msg.is_multipart():
         return attachments
@@ -149,8 +150,94 @@ class GmailPuller(BasePuller):
             except Exception:
                 pass
 
+    def get_stats(self) -> dict:
+        """Get mailbox statistics: folder list with counts, total, date range."""
+        conn = self._connect()
+        try:
+            # List all folders
+            status, folder_data = conn.list()
+            if status != "OK":
+                raise ValueError(f"Failed to list folders: {status}")
+
+            folders = []
+            for entry in folder_data:
+                # Parse: (\\flags) "/" "folder name"
+                if isinstance(entry, bytes):
+                    entry = entry.decode("utf-8", errors="replace")
+                parts = entry.rsplit('"', 2)
+                if len(parts) >= 2:
+                    folder_name = parts[-1].strip().strip('"')
+                else:
+                    folder_name = entry.split()[-1].strip('"')
+
+                # Try to get message count
+                try:
+                    st, dt = conn.select(folder_name, readonly=True)
+                    if st == "OK":
+                        count = int(dt[0])
+                        if count > 0:
+                            folders.append({"name": folder_name, "count": count})
+                except Exception:
+                    pass
+
+            # Get All Mail stats
+            total = 0
+            oldest_date = None
+            newest_date = None
+
+            st, dt = conn.select("[Gmail]/All Mail", readonly=True)
+            if st == "OK":
+                total = int(dt[0])
+
+                if total > 0:
+                    # Get oldest message date
+                    try:
+                        st2, dt2 = conn.fetch("1", "(BODY.PEEK[HEADER.FIELDS (DATE)])")
+                        if st2 == "OK" and dt2 and dt2[0]:
+                            raw = dt2[0][1] if isinstance(dt2[0], tuple) else dt2[0]
+                            if isinstance(raw, bytes):
+                                raw = raw.decode("utf-8", errors="replace")
+                            date_line = raw.replace("Date:", "").strip()
+                            try:
+                                parsed = email.utils.parsedate_to_datetime(date_line)
+                                oldest_date = parsed.isoformat()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+                    # Get newest message date
+                    try:
+                        st2, dt2 = conn.fetch(str(total), "(BODY.PEEK[HEADER.FIELDS (DATE)])")
+                        if st2 == "OK" and dt2 and dt2[0]:
+                            raw = dt2[0][1] if isinstance(dt2[0], tuple) else dt2[0]
+                            if isinstance(raw, bytes):
+                                raw = raw.decode("utf-8", errors="replace")
+                            date_line = raw.replace("Date:", "").strip()
+                            try:
+                                parsed = email.utils.parsedate_to_datetime(date_line)
+                                newest_date = parsed.isoformat()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+            return {
+                "email": self.credentials.get("email", ""),
+                "total_messages": total,
+                "oldest_date": oldest_date,
+                "newest_date": newest_date,
+                "folders": sorted(folders, key=lambda f: f["count"], reverse=True),
+            }
+        finally:
+            try:
+                conn.logout()
+            except Exception:
+                pass
+
     def pull(self, cursor: str | None = None, since: str | None = None) -> PullResult:
         my_email = self.credentials.get("email", "").lower()
+        max_messages = self.config.get("max_messages", DEFAULT_MAX_MESSAGES)
         conn = self._connect()
 
         try:
@@ -160,7 +247,6 @@ class GmailPuller(BasePuller):
             if since:
                 cutoff = datetime.fromisoformat(since)
             elif cursor:
-                # cursor = ISO date of last sync
                 cutoff = datetime.fromisoformat(cursor)
             else:
                 days = self.config.get("sync_days", DEFAULT_SYNC_DAYS)
@@ -168,7 +254,7 @@ class GmailPuller(BasePuller):
 
             # IMAP date search (format: DD-Mon-YYYY)
             imap_date = cutoff.strftime("%d-%b-%Y")
-            log.info("Gmail IMAP sync starting (since=%s)", imap_date)
+            log.info("Gmail IMAP sync starting (since=%s, max=%d)", imap_date, max_messages)
 
             status, data = conn.search(None, f'(SINCE {imap_date})')
             if status != "OK":
@@ -177,25 +263,44 @@ class GmailPuller(BasePuller):
             msg_nums = data[0].split()
             log.info("Gmail IMAP: %d messages since %s", len(msg_nums), imap_date)
 
-            # Cap to prevent huge initial syncs
-            if len(msg_nums) > MAX_MESSAGES:
-                log.warning("Gmail IMAP: capping to %d most recent messages", MAX_MESSAGES)
-                msg_nums = msg_nums[-MAX_MESSAGES:]
+            # Cap to configured max (take most recent)
+            if len(msg_nums) > max_messages:
+                log.info("Gmail IMAP: capping to %d most recent messages", max_messages)
+                msg_nums = msg_nums[-max_messages:]
 
             items = []
             for i, num in enumerate(msg_nums):
                 try:
-                    status, msg_data = conn.fetch(num, "(RFC822)")
+                    # Fetch RFC822 body + Gmail thread ID via X-GM-THRID extension
+                    status, msg_data = conn.fetch(num, "(X-GM-THRID RFC822)")
                     if status != "OK" or not msg_data or not msg_data[0]:
                         continue
 
-                    raw_email = msg_data[0][1]
+                    # Parse X-GM-THRID from the response
+                    gmail_thread_id = None
+                    raw_email = None
+                    for part in msg_data:
+                        if isinstance(part, tuple):
+                            header = part[0]
+                            if isinstance(header, bytes):
+                                header = header.decode("utf-8", errors="replace")
+                            # Extract X-GM-THRID value from IMAP response
+                            if "X-GM-THRID" in header:
+                                import re
+                                thrid_match = re.search(r'X-GM-THRID\s+(\d+)', header)
+                                if thrid_match:
+                                    gmail_thread_id = thrid_match.group(1)
+                            raw_email = part[1]
+
+                    if raw_email is None:
+                        continue
+
                     msg = email.message_from_bytes(raw_email)
-                    item = self.normalize(msg, my_email)
+                    item = self.normalize(msg, my_email, gmail_thread_id)
                     if item:
                         items.append(item)
 
-                    if (i + 1) % 100 == 0:
+                    if (i + 1) % 50 == 0:
                         log.info("Gmail IMAP: processed %d/%d messages", i + 1, len(msg_nums))
                 except Exception as e:
                     log.warning("Gmail IMAP: failed to process message %s: %s", num, e)
@@ -217,7 +322,7 @@ class GmailPuller(BasePuller):
             except Exception:
                 pass
 
-    def normalize(self, raw_item, my_email: str = "") -> dict | None:
+    def normalize(self, raw_item, my_email: str = "", gmail_thread_id: str | None = None) -> dict | None:
         msg = raw_item
 
         subject = _decode_header(msg.get("Subject", ""))
@@ -244,27 +349,34 @@ class GmailPuller(BasePuller):
         # Parse date
         source_ts = _parse_date(msg)
 
-        # Decode body
+        # Decode raw body parts
         body_plain, body_html = _get_body(msg)
 
         # Skip empty messages
         if not body_plain and not body_html and not subject:
             return None
 
-        # Attachments
+        # Content pipeline: convert to markdown with filtering and truncation
+        body_markdown = process_content(body_plain=body_plain, body_html=body_html)
+
+        # Attachments metadata only (no binary content)
         attachments = _get_attachments(msg)
 
-        # Conversation: strip Re:/Fwd: prefixes from subject
+        # Conversation display name: strip Re:/Fwd: prefixes from subject
         conv = subject
         for prefix in ("Re: ", "RE: ", "Fwd: ", "FWD: ", "Fw: "):
             while conv.startswith(prefix):
                 conv = conv[len(prefix):]
+
+        # Thread ID for global grouping
+        thread_id = f"gmail:{gmail_thread_id}" if gmail_thread_id else None
 
         # Use Message-ID as unique source_id
         source_id = message_id.strip("<>") if message_id else f"gmail_{hash(msg.as_bytes())}"
 
         metadata = {
             "message_id": message_id,
+            "gmail_thread_id": gmail_thread_id,
             "in_reply_to": msg.get("In-Reply-To", ""),
             "references": msg.get("References", ""),
         }
@@ -272,12 +384,13 @@ class GmailPuller(BasePuller):
         return {
             "item_type": "email",
             "source_id": f"gmail_{source_id}",
+            "thread_id": thread_id,
             "conversation": conv or "No Subject",
             "sender": sender,
             "sender_is_me": sender_is_me,
             "recipients": json.dumps(recipients),
             "subject": subject,
-            "body_plain": body_plain,
+            "body_plain": body_markdown,
             "body_html": body_html,
             "attachments": json.dumps(attachments),
             "labels": "[]",

@@ -82,11 +82,20 @@ export interface MessageItem {
 
 export interface ConversationSummary {
   conversation: string;
+  thread_id: string | null;
   service_id: string;
   msg_count: number;
   last_sender: string;
   preview: string;
   time: string;
+}
+
+export interface ServiceStats {
+  email?: string;
+  total_messages: number;
+  oldest_date: string | null;
+  newest_date: string | null;
+  folders: { name: string; count: number }[];
 }
 
 export interface SyncResult {
@@ -131,6 +140,8 @@ export const api = {
     request<SyncResult>(`/services/${id}/sync`, { method: "POST" }),
   clearServiceData: (id: string) =>
     request<{ ok: boolean }>(`/services/${id}/clear`, { method: "POST" }),
+  getServiceStats: (id: string) =>
+    request<ServiceStats>(`/services/${id}/stats`),
 
   // Documents
   listDocuments: (params?: { q?: string }) => {
@@ -149,9 +160,10 @@ export const api = {
     const qs = sp.toString();
     return request<ConversationSummary[]>(`/conversations${qs ? `?${qs}` : ""}`);
   },
-  getConversation: (name: string, service?: string) => {
+  getConversation: (name: string, opts?: { service?: string; thread_id?: string }) => {
     const sp = new URLSearchParams();
-    if (service) sp.set("service", service);
+    if (opts?.service) sp.set("service", opts.service);
+    if (opts?.thread_id) sp.set("thread_id", opts.thread_id);
     const qs = sp.toString();
     return request<MessageItem[]>(`/conversations/${encodeURIComponent(name)}${qs ? `?${qs}` : ""}`);
   },

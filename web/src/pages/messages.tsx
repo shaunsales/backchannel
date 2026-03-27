@@ -10,7 +10,7 @@ import { ServiceIcon } from "@/components/service-icon";
 export default function MessagesPage() {
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
-  const [activeConv, setActiveConv] = useState<{ name: string; service: string } | null>(null);
+  const [activeConv, setActiveConv] = useState<{ name: string; service: string; thread_id?: string | null } | null>(null);
 
   const { data: conversations, isLoading } = useQuery({
     queryKey: ["conversations", search],
@@ -19,7 +19,10 @@ export default function MessagesPage() {
 
   const { data: threadMessages, isLoading: threadLoading } = useQuery({
     queryKey: ["conversation", activeConv?.name, activeConv?.service],
-    queryFn: () => api.getConversation(activeConv!.name, activeConv!.service),
+    queryFn: () => api.getConversation(activeConv!.name, {
+      service: activeConv!.service,
+      thread_id: activeConv!.thread_id ?? undefined,
+    }),
     enabled: !!activeConv,
   });
 
@@ -102,7 +105,7 @@ export default function MessagesPage() {
             <Card
               key={`${c.conversation}-${c.service_id}-${i}`}
               className="cursor-pointer transition-colors hover:border-border"
-              onClick={() => setActiveConv({ name: c.conversation, service: c.service_id })}
+              onClick={() => setActiveConv({ name: c.conversation, service: c.service_id, thread_id: c.thread_id })}
             >
               <CardContent className="p-3">
                 <div className="mb-1 flex items-center justify-between">

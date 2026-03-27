@@ -7,5 +7,6 @@ google-auth-httplib2>=0.2.0
 telethon>=1.37.0
 imapclient>=3.0.0
 mail-parser>=3.15.0
+markdownify>=1.2.0
 python-dotenv>=1.0.0
 qrcode[pil]>=8.0

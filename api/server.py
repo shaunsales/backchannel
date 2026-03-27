@@ -259,6 +259,21 @@ def sync_service(service_id: str):
         raise HTTPException(500, str(e))
 
 
+@app.get("/api/services/{service_id}/stats")
+def get_service_stats(service_id: str):
+    """Get remote service statistics (e.g. Gmail folder counts, date range)."""
+    try:
+        puller = manager.get_puller(service_id)
+        if not hasattr(puller, "get_stats"):
+            raise HTTPException(400, f"Stats not supported for this service type")
+        stats = puller.get_stats()
+        return stats
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @app.post("/api/services/{service_id}/clear")
 def clear_service_data(service_id: str):
     try:
@@ -320,11 +335,14 @@ def get_document(doc_id: int):
 
 @app.get("/api/conversations")
 def list_conversations(q: str = "", limit: int = 50):
-    """Return conversations (threads) with latest message preview."""
+    """Return conversations (threads) with latest message preview.
+    Groups by thread_id when available, falls back to conversation+service_id.
+    """
     db = get_db()
     if q:
         rows = db.execute(
-            """SELECT conversation, service_id,
+            """SELECT COALESCE(thread_id, conversation || ':' || service_id) as group_key,
+                      conversation, service_id, thread_id,
                       MAX(source_ts) as last_ts,
                       COUNT(*) as msg_count
                FROM items
@@ -332,17 +350,18 @@ def list_conversations(q: str = "", limit: int = 50):
                    SELECT i.id FROM items i JOIN items_fts f ON i.id = f.rowid
                    WHERE items_fts MATCH ?
                )
-               GROUP BY conversation, service_id
+               GROUP BY group_key
                ORDER BY last_ts DESC LIMIT ?""",
             (q, limit),
         ).fetchall()
     else:
         rows = db.execute(
-            """SELECT conversation, service_id,
+            """SELECT COALESCE(thread_id, conversation || ':' || service_id) as group_key,
+                      conversation, service_id, thread_id,
                       MAX(source_ts) as last_ts,
                       COUNT(*) as msg_count
                FROM items
-               GROUP BY conversation, service_id
+               GROUP BY group_key
                ORDER BY last_ts DESC LIMIT ?""",
             (limit,),
         ).fetchall()
@@ -351,11 +370,18 @@ def list_conversations(q: str = "", limit: int = 50):
     for r in rows:
         d = dict(r)
         conv = d["conversation"] or "Unknown"
-        # Get latest message in this conversation
-        latest = db.execute(
-            "SELECT sender, body_plain FROM items WHERE conversation = ? AND service_id = ? ORDER BY source_ts DESC LIMIT 1",
-            (d["conversation"], d["service_id"]),
-        ).fetchone()
+        group_key = d["group_key"]
+        # Get latest message in this conversation group
+        if d["thread_id"]:
+            latest = db.execute(
+                "SELECT sender, body_plain FROM items WHERE thread_id = ? ORDER BY source_ts DESC LIMIT 1",
+                (d["thread_id"],),
+            ).fetchone()
+        else:
+            latest = db.execute(
+                "SELECT sender, body_plain FROM items WHERE conversation = ? AND service_id = ? ORDER BY source_ts DESC LIMIT 1",
+                (d["conversation"], d["service_id"]),
+            ).fetchone()
         preview = ""
         sender = ""
         if latest:
@@ -363,6 +389,7 @@ def list_conversations(q: str = "", limit: int = 50):
             preview = (latest["body_plain"] or "")[:150]
         result.append({
             "conversation": conv,
+            "thread_id": d["thread_id"],
             "service_id": d["service_id"],
             "msg_count": d["msg_count"],
             "last_sender": sender,
@@ -373,10 +400,15 @@ def list_conversations(q: str = "", limit: int = 50):
 
 
 @app.get("/api/conversations/{conv_name:path}")
-def get_conversation(conv_name: str, service: str = "", limit: int = 100):
+def get_conversation(conv_name: str, service: str = "", thread_id: str = "", limit: int = 100):
     """Return all messages in a conversation thread."""
     db = get_db()
-    if service:
+    if thread_id:
+        rows = db.execute(
+            "SELECT * FROM items WHERE thread_id = ? ORDER BY source_ts ASC LIMIT ?",
+            (thread_id, limit),
+        ).fetchall()
+    elif service:
         rows = db.execute(
             "SELECT * FROM items WHERE conversation = ? AND service_id = ? ORDER BY source_ts ASC LIMIT ?",
             (conv_name, service, limit),
@@ -395,6 +427,7 @@ def get_conversation(conv_name: str, service: str = "", limit: int = 100):
             "service_id": d["service_id"],
             "sender": d["sender"],
             "conversation": d["conversation"],
+            "thread_id": d.get("thread_id"),
             "body": d["body_plain"] or "",
             "source_ts": d["source_ts"],
             "time": _humanize_time(d["source_ts"]),

@@ -416,6 +416,7 @@ class TelegramPuller(BasePuller):
         return {
             "item_type": "message",
             "source_id": f"tg_{message.chat_id}_{message.id}",
+            "thread_id": f"telegram:{message.chat_id}",
             "conversation": dialog_name,
             "sender": sender_name,
             "sender_is_me": 1 if sender_id == my_id else 0,

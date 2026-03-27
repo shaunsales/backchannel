@@ -176,14 +176,16 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
         for item in result.items:
             item["service_id"] = service_id
             item["sync_run_id"] = run_id
+            item.setdefault("thread_id", None)
             db.execute("""
-                INSERT INTO items (service_id, item_type, source_id, conversation,
+                INSERT INTO items (service_id, item_type, source_id, thread_id, conversation,
                     sender, sender_is_me, recipients, subject, body_plain, body_html,
                     attachments, labels, metadata, source_ts, sync_run_id)
-                VALUES (:service_id, :item_type, :source_id, :conversation,
+                VALUES (:service_id, :item_type, :source_id, :thread_id, :conversation,
                     :sender, :sender_is_me, :recipients, :subject, :body_plain, :body_html,
                     :attachments, :labels, :metadata, :source_ts, :sync_run_id)
                 ON CONFLICT(service_id, source_id) DO UPDATE SET
+                    thread_id=excluded.thread_id,
                     body_plain=excluded.body_plain, body_html=excluded.body_html,
                     subject=excluded.subject, labels=excluded.labels,
                     metadata=excluded.metadata, source_ts=excluded.source_ts

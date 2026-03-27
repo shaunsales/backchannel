@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, type ServiceStats } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Loader2, Pencil, X } from "lucide-react";
+import { Loader2, Pencil, X, BarChart3 } from "lucide-react";
 import { ServiceIcon } from "@/components/service-icon";
 
 export default function AccountDetailPage() {
@@ -31,6 +31,8 @@ export default function AccountDetailPage() {
   const [renaming, setRenaming] = useState(false);
   const [nameVal, setNameVal] = useState("");
   const [syncStatus, setSyncStatus] = useState("");
+  const [stats, setStats] = useState<ServiceStats | null>(null);
+  const [statsError, setStatsError] = useState("");
 
   const renameMut = useMutation({
     mutationFn: (name: string) => api.renameService(id!, name),
@@ -47,6 +49,18 @@ export default function AccountDetailPage() {
       qc.invalidateQueries({ queryKey: ["service", id] });
     },
     onError: (e: Error) => setSyncStatus(`✗ ${e.message}`),
+  });
+
+  const statsMut = useMutation({
+    mutationFn: () => api.getServiceStats(id!),
+    onSuccess: (s) => {
+      setStats(s);
+      setStatsError("");
+    },
+    onError: (e: Error) => {
+      setStats(null);
+      setStatsError(e.message);
+    },
   });
 
   const clearMut = useMutation({
@@ -181,6 +195,56 @@ export default function AccountDetailPage() {
               >
                 Disconnect
               </Button>
+            </div>
+
+            {/* Stats button */}
+            <div className="mt-3 border-t border-border/30 pt-3">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => statsMut.mutate()}
+                disabled={statsMut.isPending}
+              >
+                {statsMut.isPending ? (
+                  <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Fetching…</>
+                ) : (
+                  <><BarChart3 className="mr-1 h-3 w-3" /> Get Stats</>
+                )}
+              </Button>
+
+              {statsError && (
+                <p className="mt-2 text-xs text-destructive">{statsError}</p>
+              )}
+
+              {stats && (
+                <div className="mt-3 rounded-md border border-border/40 p-3">
+                  <h3 className="mb-2 text-xs font-semibold">Remote Mailbox Stats</h3>
+                  {stats.email && (
+                    <p className="text-xs text-muted-foreground"><strong>Account:</strong> {stats.email}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    <strong>Total messages:</strong> {stats.total_messages.toLocaleString()}
+                  </p>
+                  {stats.oldest_date && (
+                    <p className="text-xs text-muted-foreground">
+                      <strong>Date range:</strong> {new Date(stats.oldest_date).toLocaleDateString()} — {stats.newest_date ? new Date(stats.newest_date).toLocaleDateString() : "now"}
+                    </p>
+                  )}
+                  {stats.folders && stats.folders.length > 0 && (
+                    <div className="mt-2">
+                      <p className="mb-1 text-[11px] font-medium text-muted-foreground">Folders</p>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                        {stats.folders.map((f) => (
+                          <div key={f.name} className="flex justify-between text-[11px] text-muted-foreground">
+                            <span className="truncate">{f.name}</span>
+                            <span className="font-mono">{f.count.toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {syncStatus && (
