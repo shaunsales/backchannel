@@ -1,0 +1,38 @@
+---
+description: React/TypeScript frontend conventions for the web dashboard
+globs: web/**/*.{ts,tsx,css}
+alwaysApply: false
+---
+
+# Web Conventions
+
+## Component Patterns
+
+- Functional components with default exports for pages
+- shadcn/ui primitives in `components/ui/` — use these before adding new dependencies
+- Layout components in `components/layout/` (sidebar, app shell with `<Outlet />`)
+- Icons from `lucide-react`
+
+## Data Fetching
+
+- All API calls go through `lib/api.ts` — typed `request<T>()` wrapper over fetch
+- Use React Query (`@tanstack/react-query`) for server state
+- Default stale time is 30s, retry 1 (configured in `App.tsx`)
+- Add new API types and functions to `lib/api.ts`, not inline in components
+
+## Routing
+
+- React Router v7 with `BrowserRouter`
+- Routes nested inside `<AppShell />` layout route
+- Pages live in `pages/` — one file per route
+
+## Styling
+
+- Tailwind CSS v4 via `@tailwindcss/vite` plugin (not PostCSS)
+- Use `cn()` from `lib/utils.ts` for conditional class merging (clsx + tailwind-merge)
+- Dark mode supported via shadcn theme
+
+## Imports
+
+- Use `@/` path alias for all imports from `src/` (e.g., `@/components/ui/button`)
+- Keep third-party imports above local imports

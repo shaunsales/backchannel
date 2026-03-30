@@ -1,0 +1,74 @@
+---
+description: Backchannel project overview, tech stack, and how to run
+alwaysApply: true
+---
+
+# Backchannel — Tech Stack & Project Overview
+
+Local-first daily data sync app: Python API + React dashboard over a shared SQLite database.
+
+## Running the Apps
+
+### Backend (Python API)
+
+```bash
+source .venv/bin/activate
+uvicorn api.server:app --port 8787 --reload
+```
+
+- Virtual env lives at `.venv/` in the project root
+- `--reload` enables auto-restart on file changes (built into Uvicorn)
+- API serves on http://localhost:8787
+
+### Frontend (React)
+
+```bash
+cd web && npm run dev
+```
+
+- Vite dev server on http://localhost:5173 with HMR
+- Proxies `/api/*` → `http://localhost:8787` (configured in `vite.config.ts`)
+
+## Project Structure
+
+```
+api/                    Python FastAPI backend
+  server.py             FastAPI app, all route handlers
+  config.py             Env var loading
+  db.py                 SQLite schema, migrations, get_db()
+  content.py            HTML→markdown processing pipeline
+  logstream.py          SSE real-time log broadcasting
+  pullers/              Data pull engines (one per service)
+    base.py             BasePuller ABC + PullResult dataclass
+    notion.py           Notion page sync
+    telegram.py         Telegram message sync
+    gmail.py            Gmail IMAP sync
+  services/
+    manager.py          Service lifecycle, puller registry, CRUD
+web/                    React + TypeScript frontend
+  src/
+    App.tsx             Router + React Query provider
+    lib/api.ts          Typed fetch wrapper (all API calls)
+    lib/utils.ts        Utility helpers
+    components/ui/      shadcn/ui primitives
+    components/layout/  Sidebar + app shell
+    pages/              One file per route
+scripts/
+  daily_sync.py         Headless sync entry point
+data/
+  backchannel.db        SQLite database (gitignored)
+```
+
+## Tech Stack
+
+- **Backend**: FastAPI, Uvicorn, SQLite (WAL mode, FTS5), SSE streaming, python-dotenv
+- **Frontend**: Vite 8, React 19, TypeScript 5.9, Tailwind CSS v4, shadcn/ui (Radix), React Query (TanStack), React Router, Lucide icons
+- **Path alias**: `@/` → `web/src/` (Vite + tsconfig)
+
+## Key Architecture Decisions
+
+- All service credentials stored in the SQLite DB, not in `.env`
+- `.env` only holds `DATABASE_PATH`, `DASHBOARD_PORT`, `USER_EMAIL`
+- Dependencies: `requirements.txt` (Python), `web/package.json` (JS)
+- No ORM — raw SQL with `sqlite3.Row` for dict-like access
+- Thread-local DB connections with WAL + foreign keys enabled
