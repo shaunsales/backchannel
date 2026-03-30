@@ -3,9 +3,9 @@
 ## Overview
 
 Backchannel is a local-first daily data sync app that pulls messages, emails,
-notes, and pages from 5 services into a unified SQLite database. Runs on a Mac
-Mini. Includes a web dashboard for auth management, monitoring, and manual sync
-triggers.
+notes, and pages from multiple services into a unified SQLite database. Runs on
+a Mac Mini. Includes a React web dashboard for auth management, monitoring, and
+manual sync triggers, plus a FastAPI backend serving a REST API.
 
 Core loop: Every morning at 06:00, Backchannel pulls everything new from all
 connected services, stores it in a unified items table, ready for AI agent
@@ -13,29 +13,42 @@ ingestion.
 
 ### Current Progress
 
-- **Foundation complete**: FastHTML app, SQLite schema, dashboard, layout, components
+- **Foundation complete**: FastAPI backend, React frontend, SQLite schema,
+  dashboard, layout, components
 - **Notion fully integrated**: API key auth, page sync with markdown conversion,
   document versioning, content-hash dedup, incremental sync, deletion detection,
-  soft-delete (hide/unhide), responsive grid UI with text previews
-- **JSON API live**: endpoints for documents, items, search, and stats
-- **Remaining**: Telegram, Gmail, ProtonMail, WhatsApp pullers; daily sync
-  automation; sync history page; error handling & rate limiting
+  soft-delete (hide/unhide)
+- **Telegram fully integrated**: Multi-step phone/code/2FA auth, dialog filtering,
+  rate limiting, incremental sync by message ID per dialog, preview sync
+- **Gmail fully integrated**: IMAP with App Password auth, folder stats,
+  HTML-to-markdown content pipeline, X-GM-THRID thread grouping, incremental
+  sync by date
+- **JSON API live**: endpoints for dashboard, services CRUD, documents,
+  conversations, messages, history, logs
+- **React dashboard live**: accounts, documents, messages, history, logs pages
+- **Remaining**: ProtonMail, WhatsApp pullers; daily sync automation; launchd
+  plists
 
 
 ## Tech Stack
 
-Web framework:      FastHTML (Python-native HTML, HTMX built-in, no templates)
-CSS:                Tailwind CSS 4 and DaisyUI 4 via CDN
-Interactivity:      HTMX (bundled with FastHTML)
+Frontend:           Vite 8, React 19, TypeScript 5.9
+CSS:                Tailwind CSS v4, shadcn/ui (Radix Nova preset, dark mode)
+State management:   React Query (TanStack Query)
+Routing:            React Router
+Icons:              Lucide
+Backend:            FastAPI + Uvicorn (REST API, port 8787)
 Database:           SQLite via sqlite3 (single file, FTS5 for search)
+Content processing: markdownify (HTML→markdown), custom pipeline in content.py
 Scheduler:          macOS launchd (native, survives reboots)
-WhatsApp bridge:    Go binary built on whatsmeow (whatsapp-mcp project)
-ProtonMail access:  Proton Mail Bridge (user installs, exposes IMAP on localhost)
+WhatsApp bridge:    Go binary built on whatsmeow (whatsapp-mcp project, planned)
+ProtonMail access:  Proton Mail Bridge (user installs, exposes IMAP, planned)
 
 
 ## Python Dependencies
 
-python-fasthtml
+fastapi
+uvicorn
 notion-client
 google-api-python-client
 google-auth-oauthlib
@@ -43,6 +56,7 @@ google-auth-httplib2
 telethon
 imapclient
 mail-parser
+markdownify
 python-dotenv
 qrcode[pil]
 
@@ -50,94 +64,86 @@ qrcode[pil]
 ## Project Structure
 
 backchannel/
-  app/
+  api/
     __init__.py
-    main.py                     FastHTML app, mounts all routes
+    server.py                   FastAPI app, all REST endpoints
     config.py                   Reads .env, exposes settings
-    db.py                       get_db(), init_db(), migrations
-
-    components/                 Reusable Python-to-HTML components
-      __init__.py
-      layout.py                 page(), nav_bar() base shell
-      service_card.py           service_card(service) status card
-      sync_table.py             sync_history_table(rows) run log
-      alerts.py                 success(), error(), warning() banners
-      auth_forms.py             Per-service auth UI components
-
-    routes/                     FastHTML route handlers
-      __init__.py
-      dashboard.py              GET /
-      services.py               GET /services/SERVICE_ID and GET /services/SERVICE_ID/card
-      auth.py                   Auth flows per service (Notion implemented)
-      sync.py                   POST /sync/SERVICE_ID and POST /sync/all
-      docs.py                   GET /docs — document browser with grid, search, hide/unhide
-      api.py                    GET /api/* — JSON API for AI agent ingestion
-      history.py                GET /history (planned)
+    db.py                       get_db(), init_db(), schema, migrations
+    content.py                  Content processing (HTML→markdown, filtering)
+    logstream.py                In-memory log broadcast for real-time panel
 
     pullers/                    Data pull engines, one per service
       __init__.py
       base.py                   BasePuller ABC and PullResult dataclass
-      notion.py
-      gmail.py
-      telegram.py
-      protonmail.py
-      whatsapp.py
+      notion.py                 Notion page sync
+      telegram.py               Telegram message sync
+      gmail.py                  Gmail IMAP sync
 
     services/                   Service lifecycle management
       __init__.py
-      manager.py                connect(), disconnect(), test(), status()
+      manager.py                connect, disconnect, sync, CRUD, puller registry
 
-  whatsapp-bridge/              Git-ignored, user builds or downloads
-    whatsapp-bridge             Compiled Go binary
-    store/
-      messages.db               Bridge own SQLite (read-only by our app)
+  web/
+    src/
+      App.tsx                   React Router + React Query setup
+      main.tsx                  Entry point
+      index.css                 Tailwind v4 styles
+      lib/
+        api.ts                  Typed fetch wrapper with all API functions
+        utils.ts                Utility helpers
+      components/
+        layout/                 Sidebar + app-shell
+        ui/                     shadcn/ui components
+        error-boundary.tsx
+        service-icon.tsx
+      pages/
+        dashboard.tsx
+        accounts.tsx
+        account-detail.tsx
+        add-account.tsx
+        documents.tsx
+        document-detail.tsx
+        messages.tsx
+        history.tsx
+        logs.tsx
+
+  scripts/
+    daily_sync.py               Entry point called by launchd
 
   data/
     backchannel.db              Main SQLite database
     sessions/                   Telegram .session files
-    tokens/                     Gmail token.json and credentials.json
+    tokens/                     Gmail credentials (planned for OAuth)
     logs/
-
-  scripts/
-    setup.sh                    Full setup: brew, venv, deps, init db
-    daily_sync.py               Entry point called by launchd
-    com.backchannel.daily.plist
-    com.backchannel.web.plist
-    com.backchannel.whatsapp.plist
-
-  requirements.txt
-  .env
-  .env.example
-  PLAN.md
-  README.md
 
 
 ## Data Model
 
 ### services
 
-One row per service (5 total, seeded on first run). Tracks connection status,
-stores credentials as a JSON blob, and holds the sync cursor that each puller
-uses to know where it left off.
+One row per connected service instance. Tracks connection status, stores
+credentials as a JSON blob, and holds the sync cursor that each puller uses
+to know where it left off. Supports multiple instances of the same type
+(e.g. two Gmail accounts).
 
-Fields: id, display_name, status, auth_type, credentials (JSON), config (JSON),
-enabled, last_sync_at, sync_cursor, created_at, updated_at.
+Fields: id, service_type, display_name, status, auth_type, credentials (JSON),
+config (JSON), enabled, last_sync_at, sync_cursor, created_at, updated_at.
 
 Status is one of: connected, disconnected, auth_required, error, syncing.
 
-Auth type is one of: api_key (Notion), oauth2 (Gmail), phone_code (Telegram),
-imap_login (ProtonMail), qr_link (WhatsApp).
+Auth type is one of: api_key (Notion), app_password (Gmail), phone_code
+(Telegram), imap_login (ProtonMail), qr_link (WhatsApp).
 
 The sync cursor is a string whose format varies by service:
-  - Gmail: a historyId string
-  - Telegram: JSON mapping chat IDs to last message IDs
+  - Gmail: ISO timestamp of last sync
+  - Telegram: JSON with per-dialog last message IDs and last_sync_ts
   - Notion: ISO timestamp of last edited time
-  - ProtonMail: JSON mapping folder names to last UIDs
-  - WhatsApp: integer rowid from the bridge database
+  - ProtonMail: JSON mapping folder names to last UIDs (planned)
+  - WhatsApp: integer rowid from the bridge database (planned)
 
 Seed data inserted on first run:
   notion      Notion       api_key
-  gmail       Gmail        oauth2
+  gmail       Gmail        app_password
   telegram    Telegram     phone_code
   protonmail  ProtonMail   imap_login
   whatsapp    WhatsApp     qr_link
@@ -154,22 +160,23 @@ error_message, duration_sec.
 
 ### items
 
-The main data store. Every message, email, page, and database row from every
-service ends up here in a common schema. Primary key is SERVICE_ID:SOURCE_ID
-so upserts are natural.
+The main data store. Every message and email from every service ends up here
+in a common schema. Primary key is SERVICE_ID:SOURCE_ID so upserts are natural.
 
-Fields: id, service_id, item_type, source_id, conversation, sender,
+Fields: id, service_id, item_type, source_id, thread_id, conversation, sender,
 sender_is_me, recipients (JSON array), subject, body_plain, body_html,
 attachments (JSON array), labels (JSON array), metadata (JSON blob),
 source_ts, fetched_at, sync_run_id.
 
 item_type is one of: email, message, page, db_row.
 
-sender_is_me is a boolean flag indicating whether I sent or authored this item.
-This is critical for the AI agent to extract my own todos and commitments.
+thread_id groups messages into threads across services (e.g. "telegram:12345",
+"gmail:thread_abc").
 
-Indexes on: service_id, source_ts descending, item_type, and a composite
-index on sender_is_me plus source_ts for fast "things I said" queries.
+sender_is_me is a boolean flag indicating whether I sent or authored this item.
+
+Indexes on: service_id, source_ts descending, item_type, thread_id, and a
+composite index on sender_is_me plus source_ts for fast "things I said" queries.
 
 ### items_fts
 
@@ -188,8 +195,8 @@ version, hidden, metadata (JSON), source_ts, fetched_at, sync_run_id.
 UNIQUE(service_id, source_id).
 
 The `hidden` column (integer, default 0) enables soft-delete: hidden documents
-are greyed out in the UI and excluded from API results by default, but persist
-across syncs and can be unhidden at any time.
+are excluded from API results by default but persist across syncs and can be
+unhidden at any time.
 
 Indexes on: service_id, source_ts descending.
 
@@ -236,7 +243,6 @@ Filters applied during sync:
   - Skip archived or trashed pages
   - Skip untitled pages (no title property)
   - Skip pages with empty body content after markdown conversion
-  These filters reduced initial import from 172 to ~36 quality pages.
 
 Incremental sync:
   Search returns all pages. Pages not edited since the stored cursor are
@@ -246,91 +252,119 @@ Incremental sync:
 
 Soft-delete:
   Documents can be hidden via the UI (hidden column). Hidden documents are
-  greyed out in the grid, sorted last, excluded from API by default, and
-  preserved across syncs (the hidden flag is never touched by sync logic).
+  excluded from API by default, and preserved across syncs (the hidden flag
+  is never touched by sync logic).
 
 Normalization:
   Pages become documents (not items) with full markdown content stored in
   the body_markdown column. Block types converted: paragraphs, headings,
   lists (bulleted, numbered, to-do), toggles, code blocks, quotes, callouts,
-  dividers, images, bookmarks, tables, child_page references.
+  dividers, images, bookmarks, tables, child_page references, child_database
+  references.
 
 Performance:
   Initial full sync: ~60 seconds for 36 pages.
   Incremental sync: ~3 seconds (skips content download, still detects deletions).
 
 
-### 2. Gmail
-
-Library: google-api-python-client, google-auth-oauthlib
-Auth type: oauth2
-
-Prerequisites:
-  User creates a Google Cloud project, enables the Gmail API, creates OAuth
-  credentials (Desktop app type), and downloads a credentials.json file. This
-  file goes in data/tokens/. Required scope: gmail.readonly.
-
-Auth flow:
-  User clicks Connect Gmail on the Backchannel dashboard. Server starts the
-  OAuth flow using InstalledAppFlow. Browser opens the Google consent screen.
-  On approval, tokens are saved to data/tokens/token.json. The refresh token
-  is also stored in the services credentials JSON so we can refresh without
-  re-auth.
-
-Initial sync:
-  List messages using the Gmail API with a date query (e.g. after:2024/11/01).
-  Paginate through all matching message IDs. For each ID, fetch the full
-  message including headers (From, To, Cc, Subject, Date), body parts
-  (prefer text/plain, fall back to text/html), label list, and attachment
-  metadata. Use batch requests where possible for speed.
-
-Incremental sync:
-  Call the history endpoint with the stored historyId as the starting point.
-  This returns only message IDs that were added, deleted, or had labels
-  changed since that point. Fetch full content only for new or changed
-  messages. This is very fast for daily runs.
-
-Normalization:
-  item_type is "email". Subject from header. Sender from the From header.
-  sender_is_me is 1 if the From address matches the authenticated user.
-  Recipients built from To and Cc. Labels from the Gmail label list.
-
-
-### 3. Telegram
+### 2. Telegram ✅ COMPLETE
 
 Library: telethon
 Auth type: phone_code
+Status: Fully implemented and working
 
 Prerequisites:
   User registers an app at my.telegram.org/apps and gets an api_id (integer)
-  and api_hash (string). These go in the .env file.
+  and api_hash (string). These are entered via the dashboard and stored in the
+  database credentials JSON (not in .env).
 
 Auth flow:
-  User enters their phone number in the Backchannel dashboard. Server sends a
-  code request via Telethon. User receives a code in the Telegram app and
-  enters it in the dashboard. If 2FA is enabled, a follow-up form asks for
-  the password. A session file is saved to data/sessions/ and persists across
-  restarts. No need to re-authenticate unless the session is revoked.
+  User enters API ID, API Hash, and phone number in the Backchannel dashboard.
+  Server sends a code request via Telethon. User receives a code in the
+  Telegram app and enters it in the dashboard. If 2FA is enabled, a follow-up
+  form asks for the password. A per-instance session file is saved to
+  data/sessions/ and persists across restarts.
 
 Initial sync:
   List all dialogs (private chats, groups, channels) via get_dialogs. For each
-  dialog, iterate messages using get_messages with an offset_date of 90 days
-  ago. Telethon handles pagination internally. Store each message with the
-  chat name, sender name, text content, timestamp, and media info.
+  dialog, iterate messages with a cap of 200 per dialog. Telethon handles
+  pagination internally. Store each message with the chat name, sender name,
+  text content, timestamp, and media info.
+
+Dialog filters:
+  - Skip archived dialogs
+  - Skip bots
+  - Skip broadcast channels (keep supergroups)
+  - Skip forbidden/deleted chats
+  - Skip inactive dialogs (no messages within sync window, default 365 days)
+  - Skip dialogs where user never replied (checks first 50 messages)
+
+Rate limiting:
+  Proactive delays: 1s between dialogs, 0.5s after reply-check requests.
+  Telethon auto-sleeps on any remaining Telegram FloodWaitError.
+
+Preview sync:
+  Dry-run mode (preview_sync()) returns dialog summary without writing to DB.
 
 Incremental sync:
   For each dialog, request messages with min_id set to the last seen message
-  ID for that chat. Only new messages are returned. Very efficient since
-  Telegram message IDs are sequential per chat.
+  ID for that chat. Only new messages are returned. Cursor is a JSON object
+  with per-dialog message IDs and last_sync_ts.
 
 Normalization:
   item_type is "message". Conversation is the chat or group title. Sender is
-  the first name plus last name or username. sender_is_me is 1 if the sender
-  matches the authenticated Telegram user. Metadata includes message ID,
-  reply-to ID, forwarding info, and media type.
+  the entity display name. sender_is_me is 1 if the sender matches the
+  authenticated Telegram user. thread_id is "telegram:{chat_id}". Metadata
+  includes message ID, chat ID, reply-to ID, forwarding info, and media type.
 
 
-### 4. ProtonMail
+### 3. Gmail ✅ COMPLETE
+
+Library: imaplib (standard library)
+Auth type: app_password (IMAP with App Password)
+Status: Fully implemented and working
+
+Prerequisites:
+  User enables IMAP access in Gmail settings and generates an App Password
+  from their Google account security settings.
+
+Auth flow:
+  User enters their Gmail address and App Password in the Backchannel
+  dashboard. We test the connection by logging into imap.gmail.com and
+  selecting INBOX. On success, credentials are stored in the database.
+
+Initial sync:
+  Connect to Gmail IMAP. Select [Gmail]/All Mail folder. Search for messages
+  SINCE a configurable date (default 365 days). Fetch each message's full
+  RFC822 body plus X-GM-THRID (Gmail thread ID) via IMAP extension. Parse
+  with Python's email module. Run through content pipeline (HTML→markdown
+  conversion, binary filtering, truncation). Cap at configurable max messages
+  (default 100).
+
+Incremental sync:
+  Use the stored cursor (ISO timestamp) as the SINCE date for IMAP search.
+  Only messages after that date are fetched. New cursor is set to current
+  timestamp after successful sync.
+
+Content pipeline (api/content.py):
+  1. If HTML available → convert to markdown via markdownify
+  2. If only plain text → light cleanup (normalize line endings, collapse blanks)
+  3. Filter binary/garbage content (base64 blocks, hex blocks, low printable ratio)
+  4. Truncate to 50K characters at paragraph/line boundaries
+
+Service stats:
+  get_stats() returns folder list with message counts, total messages in
+  All Mail, oldest/newest message dates.
+
+Normalization:
+  item_type is "email". Subject from header. Sender from the From header.
+  sender_is_me is 1 if the From address matches the configured email.
+  Recipients built from To and Cc headers. thread_id is "gmail:{X-GM-THRID}".
+  Conversation is the subject with Re:/Fwd: prefixes stripped. Attachments
+  stored as metadata only (filename, content type, size — no binary content).
+
+
+### 4. ProtonMail (planned)
 
 Library: imapclient, mail-parser
 Auth type: imap_login
@@ -355,8 +389,7 @@ Initial sync:
 
 Incremental sync:
   For each folder, search for UIDs greater than the last stored UID. Only new
-  messages are fetched. Very efficient for daily runs since typically only a
-  handful of new messages per day.
+  messages are fetched.
 
 Normalization:
   item_type is "email". Subject and sender from parsed headers. sender_is_me
@@ -365,7 +398,7 @@ Normalization:
   and message-id header.
 
 
-### 5. WhatsApp
+### 5. WhatsApp (planned)
 
 Bridge: whatsapp-mcp Go binary (built on whatsmeow)
 Auth type: qr_link
@@ -379,24 +412,18 @@ Auth flow:
   User clicks Connect WhatsApp on the Backchannel dashboard. Server starts
   the Go bridge process if it is not already running. On first run the bridge
   outputs a QR code. Server captures the QR data and renders it in the
-  dashboard using the qrcode Python library. The QR display auto-refreshes
-  via HTMX polling every 2 seconds until the user scans it with their phone.
-  Once scanned, the bridge confirms authentication and begins receiving
-  messages. The session lasts approximately 20 days before re-authentication
-  is needed.
+  dashboard using the qrcode Python library. The session lasts approximately
+  20 days before re-authentication is needed.
 
 Initial sync:
   When linked, the WhatsApp primary device sends a bundle of recent messages
   to the companion device. The bridge stores these automatically in its own
-  SQLite database. Our puller reads from this database in read-only mode. The
-  amount of history depends on what WhatsApp sends, typically a few months of
-  active chats.
+  SQLite database. Our puller reads from this database in read-only mode.
 
 Incremental sync:
   The bridge runs continuously and captures all incoming and outgoing messages
   in real time into its SQLite database. Our puller simply queries for rows
-  with a rowid greater than the last stored cursor. This is the simplest of
-  all five pullers.
+  with a rowid greater than the last stored cursor.
 
 Normalization:
   item_type is "message". Conversation is the chat JID mapped to a contact
@@ -405,96 +432,97 @@ Normalization:
   includes message ID, chat JID, sender JID, whether it is a group message,
   and any media type.
 
-Bridge management:
-  The Backchannel dashboard shows whether the bridge process is running or
-  stopped with start and stop buttons. Bridge stdout and stderr are captured
-  to the logs directory. Health check verifies the process is alive and the
-  messages database is being written to.
-
 
 ## Dashboard Pages
 
+The frontend is a React SPA (Vite + React 19 + TypeScript) with React Router
+for navigation and React Query for server state. The app shell includes a
+collapsible sidebar with navigation links.
 
-### Landing Page (GET /)
+### Dashboard (/)
 
-Top section: overall stats bar showing total items across all services, number
-of services connected out of 5, and time of last full sync.
+Stats overview showing total stored items, connected account count, and last
+sync time. Connected accounts listed with item counts and last sync time.
+Recent sync activity table showing the last 10 runs across all services.
 
-Middle section: 5 service cards in a responsive grid (1 column on mobile, 2
-on tablet, 3 on desktop). Each card shows the service icon and name, status
-badge (connected, disconnected, error, syncing), last sync time, item count,
-last sync duration, and an action button (Sync Now if connected, Connect if
-not). Cards auto-refresh via HTMX polling every 30 seconds.
+### Accounts (/accounts)
 
-Bottom section: recent sync activity table showing the last 10 sync runs
-across all services with columns for service name, run type, status, items
-fetched, duration, and timestamp. Links to the full history page.
+Grid of connected service cards with stored count and last sync time. "Add
+Account" button triggers a modal to create a new service instance by selecting
+the service type and providing a display name.
 
+### Account Detail (/accounts/:id)
 
-### Service Detail Page (GET /services/SERVICE_ID)
+Per-service management page. Connect/disconnect controls, rename, sync trigger,
+clear data, view service stats (where supported). Recent sync history table.
 
-Connection section: current status with a large badge, the auth form specific
-to this service (API key input for Notion, OAuth button for Gmail, phone and
-code form for Telegram, email and password form for ProtonMail, QR code
-display for WhatsApp), connect and disconnect buttons, and a test connection
-button.
+### Documents (/docs)
 
-Configuration section: enable/disable toggle, service-specific settings such
-as which Notion pages to sync or which Gmail labels to include, and a sync
-window setting controlling how far back the initial sync goes (default 90
-days).
+Browse and search synced Notion pages. Search by title/content via the API's
+`?q=` parameter. Grid of document cards with title and preview.
 
-Sync section: a Sync Now button with a progress indicator, the current cursor
-value for debugging, and a table of the last 20 sync runs for this service.
+### Document Detail (/docs/:id)
 
+Full rendered markdown view of a document using react-markdown + remark-gfm.
 
-### Sync History Page (GET /history)
+### Messages (/messages)
 
-Full paginated table of all sync runs across all services. Columns: ID,
-service name, run type, status, started, completed, items fetched, items new,
-duration, and error message. Filterable by service and by status. Sorted by
-date descending.
+Conversation-grouped message view. Search across all messages via FTS. Service
+filter pills. Drill into conversation threads.
 
+### History (/history)
 
-### HTMX Partial Endpoints
+Full sync run log across all services with status, items fetched, duration, and
+error messages.
 
-These return HTML fragments rather than full pages and are used by HTMX for
-in-place updates without page reloads:
+### Logs (/logs)
 
-  GET /services/SERVICE_ID/card     Returns just one service card (for polling)
-  POST /sync/SERVICE_ID             Triggers sync, returns updated card + result banner
-  POST /sync/all                    Triggers all services, returns status banner
-  POST /docs/ID/hide                Hide a document, returns updated card
-  POST /docs/ID/unhide              Unhide a document, returns updated card
-  GET /history/table?page=N         Returns table rows for pagination (planned)
+Real-time log viewer with SSE streaming. Displays the in-memory log buffer and
+streams new entries as they arrive.
 
 
-### JSON API Endpoints
+## REST API Endpoints
 
-All endpoints return JSON. Used for AI agent ingestion and programmatic access.
+All endpoints return JSON. Backend runs on port 8787. The frontend's Vite dev
+server proxies `/api/*` to `http://localhost:8787`.
 
-  GET /api/stats                    Doc/item counts, service statuses
-  GET /api/documents                List docs (search, pagination, hidden filter)
-  GET /api/documents/ID             Single doc with full body + version history
-  GET /api/documents/ID/markdown    Raw markdown output (text/markdown)
-  GET /api/items                    List items (search, pagination, filters)
-  GET /api/items/ID                 Single item with full body
-  GET /api/search?q=...             Unified FTS search across docs and items
+### Dashboard
+  GET /api/dashboard             Stats, accounts, recent sync runs
 
-Query parameters:
-  ?q=          Full-text search
-  ?limit=      Results per page (default 50)
-  ?offset=     Pagination offset
-  ?service=    Filter by service_id
-  ?item_type=  Filter by item type (email, message, page, db_row)
-  ?sender_is_me=1  Filter to items sent by the user
-  ?include_hidden=1  Include hidden documents
+### Services CRUD
+  GET /api/services              List connected accounts
+  GET /api/services/{id}         Account detail with sync history
+  POST /api/services             Create new service instance (body: service_type, display_name)
+  PATCH /api/services/{id}       Rename service (body: display_name)
+  DELETE /api/services/{id}      Remove instance and all its data
+
+### Service Actions
+  POST /api/services/{id}/connect     Connect with credentials
+  POST /api/services/{id}/disconnect  Disconnect
+  POST /api/services/{id}/test        Test connection
+  POST /api/services/{id}/sync        Trigger sync
+  POST /api/services/{id}/clear       Clear synced data (keep credentials)
+  GET /api/services/{id}/stats        Remote service stats (e.g. Gmail folder counts)
+
+### Documents
+  GET /api/documents             List docs (?q= for search)
+  GET /api/documents/{id}        Single doc with full markdown body
+
+### Messages
+  GET /api/conversations         Conversation threads (?q= for search, ?limit=)
+  GET /api/conversations/{name}  Messages in a thread (?service=, ?thread_id=, ?limit=)
+  GET /api/messages              Flat message list (?q=, ?service=, ?limit=)
+
+### History & Logs
+  GET /api/history               Sync run log (?limit=)
+  GET /api/logs                  In-memory log buffer
+  GET /api/logs/stream           SSE real-time log stream
 
 
 ## Puller Architecture
 
-All five pullers inherit from a BasePuller abstract class that defines three
-methods:
+All pullers inherit from a BasePuller abstract class (api/pullers/base.py)
+that defines three methods:
 
   test_connection: Verifies that credentials are still valid. Returns true or
   raises an exception with a descriptive message.
@@ -502,40 +530,43 @@ methods:
   pull: Accepts a cursor (string or None) and a since date. If cursor is None
   this is an initial sync and the since date is used as the starting point. If
   cursor is present this is an incremental sync from that position. Returns a
-  PullResult containing a list of normalized item dicts, an updated cursor,
-  and counts of new and updated items.
+  PullResult containing lists of normalized items and documents, an updated
+  cursor, counts, and (for document-producing pullers) all_source_ids for
+  deletion detection.
 
-  normalize: Converts a raw service-specific response into the unified item
+  normalize: Converts a raw service-specific response into the unified items
   schema. Must populate item_type, source_id, conversation, sender,
   sender_is_me, subject, body_plain, and source_ts. Optionally populates
-  body_html, recipients, attachments, labels, and metadata.
+  body_html, recipients, attachments, labels, metadata, and thread_id.
+
+PullResult fields: items, documents, new_cursor, items_new, items_updated,
+docs_new, docs_updated, all_source_ids.
 
 
 ## Daily Sync Flow
 
 The daily_sync.py script is called by launchd at 06:00 each morning. It can
-also be triggered manually from the Backchannel dashboard.
+also be run manually.
 
 Steps:
-  1. Open database connection.
-  2. Query all services where enabled is true and status is connected.
-  3. For each service:
-     a. Instantiate the appropriate puller.
-     b. Create a sync_runs record with status running.
-     c. Call the puller pull method with the stored cursor.
-     d. Upsert each returned item into the items table.
-     e. Update the service sync_cursor and last_sync_at.
-     f. Finalize the sync_runs record with counts, duration, and status.
-     g. On exception, mark the sync run as failed and store the error message.
-     h. Commit after each service so one failure does not roll back others.
-  4. Write a summary to the log file.
+  1. Open database connection via init_db().
+  2. Register pullers for each known service type.
+  3. Query all services where enabled is true and status is connected.
+  4. For each service:
+     a. Call run_sync() from the service manager.
+     b. run_sync creates a sync_runs record, calls the puller, upserts items,
+        handles document versioning, runs deletion detection, and finalises
+        the sync run with counts and duration.
+     c. On exception, the sync run is marked as failed and the error is logged.
+     d. Each service is committed independently so one failure does not block others.
+  5. Log a summary of successes and failures.
 
 
 ## Process Management
 
-Three long-running processes managed by macOS launchd:
+Three long-running processes managed by macOS launchd (planned):
 
-  com.backchannel.web.plist: The FastHTML dashboard. Runs on localhost port
+  com.backchannel.web.plist: The FastAPI backend. Runs on localhost port
   8787. KeepAlive set to true so it restarts if it crashes.
 
   com.backchannel.whatsapp.plist: The WhatsApp Go bridge. KeepAlive true.
@@ -544,62 +575,13 @@ Three long-running processes managed by macOS launchd:
   com.backchannel.daily.plist: The daily sync script. Runs at 06:00 via
   StartCalendarInterval. Not kept alive, just triggered on schedule.
 
-All three plists live in the scripts/ directory and get symlinked or copied
-to ~/Library/LaunchAgents/ during setup.
-
 
 ## Environment Variables
 
-Stored in .env, loaded by python-dotenv:
+Stored in .env, loaded by python-dotenv. Service credentials are configured via
+the web UI and stored in the database — only general settings go in .env.
 
-  General: database path, dashboard port, user email address
-  Notion: integration token
-  Gmail: paths to credentials.json and token.json
-  Telegram: api_id, api_hash, phone number, session file path
-  ProtonMail: bridge host, bridge port, bridge email, bridge password
-  WhatsApp: path to bridge binary, path to bridge messages database
-
-
-## Build Order
-
-Phase 1 - Foundation: ✅ COMPLETE
-  FastHTML app scaffold with main.py, config.py, db.py. SQLite schema with
-  services, sync_runs, items, documents tables. Layout with sidebar, service
-  cards, dashboard. Puller architecture with BasePuller and PullResult.
-
-Phase 2 - Notion: ✅ COMPLETE (built before other services)
-  Full end-to-end: API key auth, recursive block→markdown, content-hash
-  versioning, incremental sync, deletion detection, soft-delete, document
-  browser with grid UI, text previews, hide/unhide.
-
-Phase 3 - JSON API: ✅ COMPLETE
-  /api/documents, /api/items, /api/search, /api/stats endpoints. Full-text
-  search, pagination, filtering, markdown output.
-
-Phase 4 - Telegram:
-  Implement the Telegram puller. Build the phone number and code input forms
-  on the service detail page. Test initial sync with a 90 day window. Test
-  incremental sync by message ID.
-
-Phase 5 - Gmail:
-  Implement the Gmail puller. Build the OAuth flow with browser redirect and
-  callback handler. Handle token storage and refresh. Test initial sync with
-  a date query. Test incremental sync via the history endpoint.
-
-Phase 6 - ProtonMail:
-  Implement the ProtonMail puller. Build the IMAP credential form. Test
-  connection to Proton Bridge. Sync across all folders. Test incremental
-  sync by UID.
-
-Phase 7 - WhatsApp:
-  Build or download the whatsapp-bridge Go binary. Implement bridge process
-  management. Build the QR code display with HTMX polling. Implement the
-  puller that reads from the bridge SQLite database.
-
-Phase 8 - Polish:
-  Sync history page with filtering and pagination. Error handling and retry
-  logic in pullers. Rate limit handling. Daily sync automation with launchd.
-  Setup script. README.
+  General: DATABASE_PATH, DASHBOARD_PORT, USER_EMAIL
 
 
 ## Open Questions
@@ -614,20 +596,12 @@ Phase 8 - Polish:
 
 3. WhatsApp bridge database schema needs to be confirmed by actually running
    the bridge and inspecting the SQLite file. Table and column names should be
-   verified during Phase 6.
+   verified during implementation.
 
-4. Gmail batch API is worth implementing for initial sync speed but adds
-   complexity. Start with sequential fetches and optimize later if needed.
-
-5. Notion content depth: how many levels deep to recurse into nested blocks.
-   RESOLVED: max_depth defaults to 5, configurable via service config.
-   Child pages/databases are NOT recursed into — they are independently
-   fetched as standalone documents.
-
-6. Rate limiting: Gmail has quota limits, Telegram has flood wait limits,
+4. Rate limiting: Gmail has quota limits, Telegram has flood wait limits,
    Notion has rate limits. Each puller should implement basic backoff and
-   retry. Start simple and add sophistication as needed.
+   retry. Telegram already has proactive delays; Gmail and Notion need similar.
 
-7. Identifying "me" across services: store my email addresses, phone number,
+5. Identifying "me" across services: store my email addresses, phone number,
    Telegram user ID, and WhatsApp JID in config. Check against these during
    normalization to set the sender_is_me flag reliably.
