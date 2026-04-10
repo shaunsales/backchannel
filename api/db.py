@@ -1,9 +1,14 @@
 import sqlite3
+import logging
 import threading
 from pathlib import Path
-from api.config import DATABASE_PATH
+
+import sqlite_vec
+
+from api.config import DATABASE_PATH, EMBEDDING_DIM
 
 _local = threading.local()
+log = logging.getLogger(__name__)
 
 
 def get_db():
@@ -14,6 +19,9 @@ def get_db():
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
         _local.connection = conn
     return conn
 
@@ -50,6 +58,8 @@ def init_db():
             if tid:
                 db.execute("UPDATE items SET thread_id = ? WHERE id = ?", (tid, r["id"]))
 
+    # Ensure thread_id index exists (safe now that migration has run)
+    db.execute("CREATE INDEX IF NOT EXISTS idx_items_thread ON items(thread_id)")
     db.commit()
 
     # Seed (now safe — service_type column guaranteed to exist)
@@ -62,6 +72,13 @@ def init_db():
     db.execute(
         "UPDATE sync_runs SET status='failed', error_message='Server restarted', "
         "completed_at=datetime('now') WHERE status='running'"
+    )
+    db.commit()
+
+    # Embedding chunks + vector table
+    db.executescript(CHUNKS_SCHEMA_SQL)
+    db.execute(
+        f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(embedding float[{EMBEDDING_DIM}])"
     )
     db.commit()
 
@@ -124,7 +141,6 @@ CREATE INDEX IF NOT EXISTS idx_items_service    ON items(service_id);
 CREATE INDEX IF NOT EXISTS idx_items_source_ts  ON items(source_ts DESC);
 CREATE INDEX IF NOT EXISTS idx_items_type       ON items(item_type);
 CREATE INDEX IF NOT EXISTS idx_items_me_ts      ON items(sender_is_me, source_ts DESC);
-CREATE INDEX IF NOT EXISTS idx_items_thread    ON items(thread_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
     subject, body_plain, sender, conversation,
@@ -203,6 +219,20 @@ CREATE TRIGGER IF NOT EXISTS docs_au AFTER UPDATE ON documents BEGIN
     VALUES (new.id, new.title, new.body_markdown);
 END;
 
+"""
+
+CHUNKS_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS chunks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_type TEXT NOT NULL,
+    source_id   INTEGER NOT NULL,
+    chunk_index INTEGER NOT NULL DEFAULT 0,
+    content     TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(source_type, source_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_type, source_id);
 """
 
 SEED_SQL = """

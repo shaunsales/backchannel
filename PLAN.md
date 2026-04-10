@@ -23,8 +23,11 @@ ingestion.
 - **Gmail fully integrated**: IMAP with App Password auth, folder stats,
   HTML-to-markdown content pipeline, X-GM-THRID thread grouping, incremental
   sync by date
+- **Vector search fully integrated**: sqlite-vec for database-native KNN,
+  sentence-transformers for local embeddings, hybrid semantic + keyword search,
+  auto-indexing after sync, backfill endpoint for existing content
 - **JSON API live**: endpoints for dashboard, services CRUD, documents,
-  conversations, messages, history, logs
+  conversations, messages, history, logs, search, embeddings
 - **React dashboard live**: accounts, documents, messages, history, logs pages
 - **Remaining**: ProtonMail, WhatsApp pullers; daily sync automation; launchd
   plists
@@ -39,6 +42,8 @@ Routing:            React Router
 Icons:              Lucide
 Backend:            FastAPI + Uvicorn (REST API, port 8787)
 Database:           SQLite via sqlite3 (single file, FTS5 for search)
+Vector search:      sqlite-vec (vec0 virtual tables for KNN similarity search)
+Embeddings:         sentence-transformers (all-MiniLM-L6-v2, 384-dim, local)
 Content processing: markdownify (HTML→markdown), custom pipeline in content.py
 Scheduler:          macOS launchd (native, survives reboots)
 WhatsApp bridge:    Go binary built on whatsmeow (whatsapp-mcp project, planned)
@@ -59,6 +64,8 @@ mail-parser
 markdownify
 python-dotenv
 qrcode[pil]
+sqlite-vec
+sentence-transformers
 
 
 ## Project Structure
@@ -68,8 +75,9 @@ backchannel/
     __init__.py
     server.py                   FastAPI app, all REST endpoints
     config.py                   Reads .env, exposes settings
-    db.py                       get_db(), init_db(), schema, migrations
+    db.py                       get_db(), init_db(), schema, migrations, sqlite-vec loading
     content.py                  Content processing (HTML→markdown, filtering)
+    embeddings.py               Vector embeddings: chunking, indexing, semantic/hybrid search
     logstream.py                In-memory log broadcast for real-time panel
 
     pullers/                    Data pull engines, one per service
@@ -215,6 +223,26 @@ Index on: document_id + version descending.
 
 FTS5 virtual table on title and body_markdown from documents. Kept in sync
 via insert/delete/update triggers. Enables full-text search across all pages.
+
+### chunks
+
+Stores text chunks for vector embedding. Each item or document is split into
+one or more chunks (messages are typically one chunk; long documents are split
+at paragraph boundaries, ~1000 chars per chunk). Each chunk references its
+source row via source_type + source_id.
+
+Fields: id, source_type ("item" or "document"), source_id, chunk_index,
+content, created_at. UNIQUE(source_type, source_id, chunk_index).
+
+Index on: source_type + source_id.
+
+### vec_chunks
+
+sqlite-vec vec0 virtual table storing 384-dimensional float32 embeddings.
+Each rowid maps to a chunks.id. Enables database-native KNN similarity search
+via `WHERE embedding MATCH ? AND k = ?` syntax. Embeddings are generated
+by sentence-transformers (all-MiniLM-L6-v2) and stored using
+`serialize_float32()`.
 
 
 ## Service Details
@@ -513,6 +541,11 @@ server proxies `/api/*` to `http://localhost:8787`.
   GET /api/conversations/{name}  Messages in a thread (?service=, ?thread_id=, ?limit=)
   GET /api/messages              Flat message list (?q=, ?service=, ?limit=)
 
+### Search & Embeddings
+  GET /api/search                Unified search (?q=, ?mode=semantic|keyword|hybrid, ?limit=)
+  POST /api/embeddings/backfill  Index all un-embedded items and documents
+  GET /api/embeddings/stats      Embedding index coverage statistics
+
 ### History & Logs
   GET /api/history               Sync run log (?limit=)
   GET /api/logs                  In-memory log buffer
@@ -581,7 +614,15 @@ Three long-running processes managed by macOS launchd (planned):
 Stored in .env, loaded by python-dotenv. Service credentials are configured via
 the web UI and stored in the database — only general settings go in .env.
 
-  General: DATABASE_PATH, DASHBOARD_PORT, USER_EMAIL
+  General:    DATABASE_PATH, DASHBOARD_PORT, USER_EMAIL
+  Embeddings: EMBEDDING_MODEL (default: all-MiniLM-L6-v2), EMBEDDING_DIM (default: 384)
+
+Note: Python must be built with `--enable-loadable-sqlite-extensions` for
+sqlite-vec to work. If using pyenv, rebuild with:
+  LDFLAGS="-L/opt/homebrew/opt/sqlite/lib"
+  CPPFLAGS="-I/opt/homebrew/opt/sqlite/include"
+  PYTHON_CONFIGURE_OPTS="--enable-loadable-sqlite-extensions"
+  pyenv install -f 3.12.6
 
 
 ## Open Questions

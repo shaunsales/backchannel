@@ -347,14 +347,69 @@ Vite, TypeScript, Tailwind v4, and shadcn/ui.
 ---
 
 
-## Phase 8 — ProtonMail (planned)
+## Phase 8 — Vector Search & Embeddings ✅ COMPLETE
+
+Add semantic search across all synced content using sqlite-vec for
+database-native vector similarity search and sentence-transformers for
+local embedding generation.
+
+### Tasks
+
+- [x] **8.1. Rebuild Python with SQLite extension support**
+  pyenv Python 3.12.6 rebuilt with `--enable-loadable-sqlite-extensions`
+  flag and Homebrew SQLite headers. Required for sqlite-vec extension loading.
+
+- [x] **8.2. Add sqlite-vec extension loading to `api/db.py`**
+  Load sqlite-vec on every connection via `sqlite_vec.load(conn)`. Create
+  `chunks` table for text storage and `vec_chunks` vec0 virtual table for
+  384-dimensional float32 embeddings.
+
+- [x] **8.3. Create `api/embeddings.py`**
+  - `embed()`: generate normalized embeddings via sentence-transformers
+    (all-MiniLM-L6-v2, 384 dimensions, ~80MB model, runs locally).
+  - `chunk_text()`: split documents at paragraph boundaries (~1000 chars
+    per chunk, merge tiny trailing chunks).
+  - `index_item()`, `index_document()`: embed and store in chunks + vec_chunks.
+  - `remove_for_service()`: clean up embeddings when service data is cleared.
+  - `index_new_for_service()`: index un-embedded content after sync.
+  - `backfill()`: batch-index all un-embedded content across all services.
+  - `search_semantic()`: KNN via sqlite-vec `WHERE embedding MATCH ? AND k = ?`.
+  - `search_keyword()`: FTS5 search across items_fts and documents_fts.
+  - `search_hybrid()`: Reciprocal Rank Fusion combining semantic + keyword.
+
+- [x] **8.4. Hook embeddings into sync pipeline**
+  `api/services/manager.py` calls `index_new_for_service()` after each
+  successful sync. `clear_data()` and `remove_service_instance()` clean up
+  associated chunks and vectors.
+
+- [x] **8.5. Add search and embeddings API endpoints**
+  `GET /api/search?q=...&mode=hybrid&limit=20` — unified search endpoint.
+  `POST /api/embeddings/backfill` — index all un-embedded content.
+  `GET /api/embeddings/stats` — coverage statistics.
+
+- [x] **8.6. Backfill existing content**
+  Ran backfill on 7,259 items + 22 documents → 7,291 chunks indexed.
+  100% coverage. Semantic search ~100ms, keyword ~60ms, hybrid ~190ms.
+
+### Done when
+- [x] sqlite-vec loads on every connection and vec_chunks table exists
+- [x] All items and documents are embedded with 100% coverage
+- [x] Semantic, keyword, and hybrid search all return ranked results
+- [x] New content is auto-indexed after each sync
+- [x] Clearing/removing a service also removes its embeddings
+
+
+---
+
+
+## Phase 9 — ProtonMail (planned)
 
 IMAP-based, straightforward once Proton Bridge is running. Similar to Gmail
 but using imapclient + mail-parser instead of the standard library.
 
 ### Tasks
 
-- [ ] **8.1. Implement `api/pullers/protonmail.py`**
+- [ ] **9.1. Implement `api/pullers/protonmail.py`**
   - `test_connection()`: connect to bridge IMAP, list folders, disconnect.
   - `pull(cursor, since)`: connect to bridge. For each folder, search for
     messages SINCE date (initial) or UID > last stored UID (incremental).
@@ -363,7 +418,7 @@ but using imapclient + mail-parser instead of the standard library.
     attachments metadata, folder name. Set sender_is_me by folder (Sent)
     or From address match.
 
-- [ ] **8.2. Test with Proton Bridge running**
+- [ ] **9.2. Test with Proton Bridge running**
   Verify connection, initial sync across folders, and incremental sync by UID.
 
 ### Done when
@@ -375,25 +430,25 @@ but using imapclient + mail-parser instead of the standard library.
 ---
 
 
-## Phase 9 — WhatsApp (planned)
+## Phase 10 — WhatsApp (planned)
 
 The most complex auth flow (QR code + bridge process management) but the
 simplest puller (read from the bridge's SQLite DB).
 
 ### Tasks
 
-- [ ] **9.1. Verify or build the whatsapp-bridge Go binary**
+- [ ] **10.1. Verify or build the whatsapp-bridge Go binary**
   Clone whatsapp-mcp repo, build the binary, place in `whatsapp-bridge/`.
   Run it once manually to confirm it creates `store/messages.db` and
   outputs a QR code.
 
-- [ ] **9.2. Implement bridge process management in `api/services/manager.py`**
+- [ ] **10.2. Implement bridge process management in `api/services/manager.py`**
   - `start_bridge()`: launch the Go binary as a subprocess.
   - `stop_bridge()`: terminate the process gracefully.
   - `bridge_health()`: check if the process is alive and the messages.db
     is being written to.
 
-- [ ] **9.3. Implement `api/pullers/whatsapp.py`**
+- [ ] **10.3. Implement `api/pullers/whatsapp.py`**
   - `test_connection()`: verify bridge is running and messages.db exists.
   - `pull(cursor, since)`: open messages.db in read-only mode. Query rows
     with `rowid > cursor` (or all rows for initial sync). Return PullResult.
@@ -401,11 +456,11 @@ simplest puller (read from the bridge's SQLite DB).
     to contact names where possible. Set sender_is_me by comparing sender
     JID to own JID.
 
-- [ ] **9.4. Inspect bridge SQLite schema**
+- [ ] **10.4. Inspect bridge SQLite schema**
   Run the bridge, inspect `store/messages.db` with `.schema`. Document
   actual table and column names. Adjust puller queries accordingly.
 
-- [ ] **9.5. Test initial and incremental sync**
+- [ ] **10.5. Test initial and incremental sync**
   Scan QR, let bridge receive messages, trigger sync, verify items.
 
 ### Done when
@@ -418,30 +473,30 @@ simplest puller (read from the bridge's SQLite DB).
 ---
 
 
-## Phase 10 — Daily Sync, launchd & Polish
+## Phase 11 — Daily Sync, launchd & Polish
 
 Wire up the automated daily sync, launchd plists, error handling, and the
 setup script.
 
 ### Tasks
 
-- [x] **10.1. Create `scripts/daily_sync.py`**
+- [x] **11.1. Create `scripts/daily_sync.py`**
   Standalone entry point. Opens DB, registers pullers, queries
   enabled+connected services, runs each sequentially via run_sync(),
   commits after each, logs summary.
 
-- [ ] **10.2. Create launchd plist files**
+- [ ] **11.2. Create launchd plist files**
   - `com.backchannel.web.plist`: FastAPI on port 8787, KeepAlive true.
   - `com.backchannel.whatsapp.plist`: bridge binary, KeepAlive true.
   - `com.backchannel.daily.plist`: daily_sync.py at 06:00 via
     StartCalendarInterval.
 
-- [ ] **10.3. Create `scripts/setup.sh`**
+- [ ] **11.3. Create `scripts/setup.sh`**
   Full setup script: check brew, create venv, install deps, copy .env.example
   to .env if missing, run init_db, symlink plists to ~/Library/LaunchAgents/,
   load agents.
 
-- [ ] **10.4. Error handling & retry in pullers**
+- [ ] **11.4. Error handling & retry in pullers**
   - [x] Telegram: proactive rate limiting (1s between dialogs, 0.5s after
     reply checks) to avoid FloodWaitError. Telethon auto-sleeps on any
     remaining flood waits.

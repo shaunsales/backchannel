@@ -492,6 +492,83 @@ def get_history(limit: int = 50):
     return result
 
 
+# ── Search ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/search")
+def search(q: str = "", mode: str = "hybrid", limit: int = 20):
+    """Unified search across items and documents.
+
+    mode: semantic | keyword | hybrid (default)
+    """
+    if not q:
+        raise HTTPException(400, "Query parameter 'q' is required")
+
+    from api import embeddings
+
+    if mode == "semantic":
+        results = embeddings.search_semantic(get_db(), q, limit=limit)
+    elif mode == "keyword":
+        results = embeddings.search_keyword(get_db(), q, limit=limit)
+    else:
+        results = embeddings.search_hybrid(get_db(), q, limit=limit)
+
+    for r in results:
+        r["time"] = _humanize_time(r.get("source_ts"))
+
+    return {"results": results, "mode": mode, "total": len(results)}
+
+
+# ── Embeddings ─────────────────────────────────────────────────────────────
+
+@app.post("/api/embeddings/backfill")
+def run_backfill():
+    """Index all un-embedded items and documents."""
+    from api import embeddings
+    stats = embeddings.backfill(get_db())
+    return stats
+
+
+@app.get("/api/embeddings/stats")
+def embedding_stats():
+    """Return embedding index statistics."""
+    db = get_db()
+    try:
+        total_chunks = db.execute("SELECT COUNT(*) as cnt FROM chunks").fetchone()["cnt"]
+        item_chunks = db.execute(
+            "SELECT COUNT(*) as cnt FROM chunks WHERE source_type = 'item'"
+        ).fetchone()["cnt"]
+        doc_chunks = db.execute(
+            "SELECT COUNT(*) as cnt FROM chunks WHERE source_type = 'document'"
+        ).fetchone()["cnt"]
+        total_items = db.execute("SELECT COUNT(*) as cnt FROM items").fetchone()["cnt"]
+        total_docs = db.execute(
+            "SELECT COUNT(*) as cnt FROM documents WHERE hidden = 0"
+        ).fetchone()["cnt"]
+        unindexed_items = db.execute(
+            "SELECT COUNT(*) as cnt FROM items "
+            "WHERE id NOT IN (SELECT source_id FROM chunks WHERE source_type = 'item')"
+        ).fetchone()["cnt"]
+        unindexed_docs = db.execute(
+            "SELECT COUNT(*) as cnt FROM documents WHERE hidden = 0 "
+            "AND id NOT IN (SELECT source_id FROM chunks WHERE source_type = 'document')"
+        ).fetchone()["cnt"]
+    except Exception:
+        return {"error": "Vector tables not available"}
+
+    return {
+        "total_chunks": total_chunks,
+        "item_chunks": item_chunks,
+        "doc_chunks": doc_chunks,
+        "total_items": total_items,
+        "total_docs": total_docs,
+        "unindexed_items": unindexed_items,
+        "unindexed_docs": unindexed_docs,
+        "coverage_pct": round(
+            (1 - (unindexed_items + unindexed_docs) / max(total_items + total_docs, 1)) * 100, 1
+        ),
+    }
+
+
 # ── Logs ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/logs")

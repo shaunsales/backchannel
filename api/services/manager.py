@@ -99,6 +99,12 @@ def remove_service_instance(service_id: str):
     # Prevent removing the base service instance (id == service_type)
     if service_id == row["service_type"]:
         raise ValueError(f"Cannot remove the base {service_id} service. Disconnect it instead.")
+    # Remove vector embeddings first (references items/documents)
+    try:
+        from api.embeddings import remove_for_service
+        remove_for_service(db, service_id)
+    except Exception:
+        pass
     # Delete related data
     db.execute("DELETE FROM items WHERE service_id = ?", (service_id,))
     db.execute("DELETE FROM document_versions WHERE document_id IN (SELECT id FROM documents WHERE service_id = ?)", (service_id,))
@@ -141,6 +147,12 @@ def clear_data(service_id: str):
     row = db.execute("SELECT * FROM services WHERE id = ?", (service_id,)).fetchone()
     if row is None:
         raise ValueError(f"Unknown service: {service_id}")
+    # Remove vector embeddings first (references items/documents)
+    try:
+        from api.embeddings import remove_for_service
+        remove_for_service(db, service_id)
+    except Exception:
+        pass
     db.execute("DELETE FROM items WHERE service_id = ?", (service_id,))
     db.execute("DELETE FROM document_versions WHERE document_id IN (SELECT id FROM documents WHERE service_id = ?)", (service_id,))
     db.execute("DELETE FROM documents WHERE service_id = ?", (service_id,))
@@ -270,6 +282,15 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
 
         log.info("Sync complete for %s: %d fetched, %d new, %d updated, %d deleted (%.1fs)",
                  service_id, total_fetched, total_new, total_updated, docs_deleted, duration)
+
+        # Index any new content for vector search
+        try:
+            from api.embeddings import index_new_for_service
+            indexed = index_new_for_service(db, service_id)
+            if indexed:
+                log.info("Embedded %d new items/documents for vector search", indexed)
+        except Exception as e:
+            log.warning("Embedding indexing failed (non-fatal): %s", e)
 
         return {"run_id": run_id, "status": "success", "items": len(result.items), "docs_deleted": docs_deleted}
 

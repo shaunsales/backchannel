@@ -14,6 +14,10 @@ DATABASE_PATH = str(BASE_DIR / DATABASE_PATH) if not os.path.isabs(DATABASE_PATH
 DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8787"))
 USER_EMAIL = os.getenv("USER_EMAIL", "")
 
+# --- Embeddings --------------------------------------------------------------
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))
+
 # --- Notion ------------------------------------------------------------------
 NOTION_TOKEN = os.getenv("NOTION_TOKEN", "")
 

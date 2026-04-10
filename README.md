@@ -13,6 +13,8 @@ dashboard for account management, browsing, and monitoring.
 - **Gmail** — fully integrated (IMAP with App Password auth, folder stats,
   thread grouping via X-GM-THRID, HTML-to-markdown content pipeline,
   incremental sync by date)
+- **Vector Search** — fully integrated (sqlite-vec for database-native KNN,
+  sentence-transformers for local embeddings, hybrid semantic + keyword search)
 - **ProtonMail, WhatsApp** — planned
 
 ## Quick Start
@@ -21,6 +23,13 @@ dashboard for account management, browsing, and monitoring.
 
 ```bash
 cd backchannel
+
+# Ensure Python has SQLite extension loading support (required for sqlite-vec).
+# If using pyenv, rebuild with:
+LDFLAGS="-L/opt/homebrew/opt/sqlite/lib" \
+CPPFLAGS="-I/opt/homebrew/opt/sqlite/include" \
+PYTHON_CONFIGURE_OPTS="--enable-loadable-sqlite-extensions" \
+pyenv install -f 3.12.6
 
 # Create virtual environment and install deps
 python3 -m venv .venv
@@ -118,6 +127,9 @@ All return JSON. Backend runs on port 8787.
 | `GET /api/conversations` | Conversation threads (`?q=` for search) |
 | `GET /api/conversations/{name}` | Messages in a thread (`?service=`, `?thread_id=`) |
 | `GET /api/messages` | Flat message list (`?q=`, `?service=`, `?limit=`) |
+| `GET /api/search` | Unified search (`?q=`, `?mode=semantic|keyword|hybrid`, `?limit=`) |
+| `POST /api/embeddings/backfill` | Index all un-embedded items and documents |
+| `GET /api/embeddings/stats` | Embedding index coverage statistics |
 | `GET /api/history` | Sync run history (`?limit=`) |
 | `GET /api/logs` | In-memory log buffer |
 | `GET /api/logs/stream` | SSE real-time log stream |
@@ -128,8 +140,9 @@ All return JSON. Backend runs on port 8787.
 api/
   server.py            FastAPI REST API (port 8787)
   config.py            Environment variables
-  db.py                SQLite schema and init
+  db.py                SQLite schema, init, sqlite-vec extension loading
   content.py           Content processing pipeline (HTML→markdown, filtering, truncation)
+  embeddings.py        Vector embeddings: chunking, indexing, semantic/hybrid search
   logstream.py         Real-time log broadcasting
   pullers/             Data pull engines
     base.py            BasePuller ABC and PullResult dataclass
@@ -180,6 +193,8 @@ data/
 ### Backend
 - **FastAPI** + **Uvicorn** (REST API)
 - **SQLite** with FTS5 full-text search
+- **sqlite-vec** for database-native vector similarity search (vec0 virtual tables)
+- **sentence-transformers** (`all-MiniLM-L6-v2`) for local embedding generation
 - **SSE** for real-time log streaming
 - **markdownify** for HTML-to-markdown content processing
 
@@ -200,3 +215,5 @@ web UI and stored in the database — not in `.env`.
 | `DASHBOARD_PORT` | API port (default: `8787`) |
 | `DATABASE_PATH` | SQLite file path (default: `data/backchannel.db`) |
 | `USER_EMAIL` | Your email (for sender_is_me detection) |
+| `EMBEDDING_MODEL` | Sentence-transformers model (default: `all-MiniLM-L6-v2`) |
+| `EMBEDDING_DIM` | Embedding vector dimensions (default: `384`) |
