@@ -11,7 +11,7 @@ alwaysApply: false
 - All routes defined in `api/server.py` under the `/api` prefix
 - Use Pydantic `BaseModel` for request bodies
 - Raise `HTTPException` for error responses
-- CORS allows `localhost:5173` and `localhost:3000`
+- CORS allows any `http(s)://localhost` / `127.0.0.1` port (path-derived Vite ports)
 
 ## Database
 

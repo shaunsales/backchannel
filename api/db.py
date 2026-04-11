@@ -240,6 +240,5 @@ INSERT OR IGNORE INTO services (id, service_type, display_name, auth_type) VALUE
     ('notion',     'notion',     'Notion',     'api_key'),
     ('gmail',      'gmail',      'Gmail',      'app_password'),
     ('telegram',   'telegram',   'Telegram',   'phone_code'),
-    ('protonmail', 'protonmail', 'ProtonMail', 'imap_login'),
     ('whatsapp',   'whatsapp',   'WhatsApp',   'qr_link');
 """

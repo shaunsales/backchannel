@@ -54,7 +54,6 @@ AUTH_TYPES = {
     "notion": "api_key",
     "telegram": "phone_code",
     "gmail": "app_password",
-    "protonmail": "imap_login",
     "whatsapp": "qr_link",
 }
 
@@ -183,72 +182,113 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
 
     try:
         puller = get_puller(service_id)
-        result = puller.pull(cursor=cursor_before)
-
-        for item in result.items:
-            item["service_id"] = service_id
-            item["sync_run_id"] = run_id
-            item.setdefault("thread_id", None)
-            db.execute("""
-                INSERT INTO items (service_id, item_type, source_id, thread_id, conversation,
-                    sender, sender_is_me, recipients, subject, body_plain, body_html,
-                    attachments, labels, metadata, source_ts, sync_run_id)
-                VALUES (:service_id, :item_type, :source_id, :thread_id, :conversation,
-                    :sender, :sender_is_me, :recipients, :subject, :body_plain, :body_html,
-                    :attachments, :labels, :metadata, :source_ts, :sync_run_id)
-                ON CONFLICT(service_id, source_id) DO UPDATE SET
-                    thread_id=excluded.thread_id,
-                    body_plain=excluded.body_plain, body_html=excluded.body_html,
-                    subject=excluded.subject, labels=excluded.labels,
-                    metadata=excluded.metadata, source_ts=excluded.source_ts
-            """, item)
-
-        if result.documents:
-            log.info("Processing %d documents...", len(result.documents))
-
+        cursor_work = cursor_before
         docs_new = 0
         docs_updated = 0
-        for doc in result.documents:
-            content_hash = hashlib.sha256(doc["body_markdown"].encode()).hexdigest()
-            existing = db.execute(
-                "SELECT id, content_hash, version FROM documents WHERE service_id = ? AND source_id = ?",
-                (service_id, doc["source_id"]),
-            ).fetchone()
-
-            if existing is None:
-                db.execute("""
-                    INSERT INTO documents (service_id, source_id, title, body_markdown,
-                        content_hash, version, metadata, source_ts, sync_run_id)
-                    VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
-                """, (service_id, doc["source_id"], doc["title"], doc["body_markdown"],
-                      content_hash, doc.get("metadata", "{}"), doc.get("source_ts"), run_id))
-                docs_new += 1
-            elif existing["content_hash"] != content_hash:
-                log.info("Updated: %s (v%d → v%d)", doc["title"], existing["version"], existing["version"] + 1)
-                new_version = existing["version"] + 1
-                db.execute("""
-                    INSERT INTO document_versions (document_id, version, body_markdown, content_hash, source_ts)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (existing["id"], existing["version"],
-                      db.execute("SELECT body_markdown FROM documents WHERE id = ?", (existing["id"],)).fetchone()["body_markdown"],
-                      existing["content_hash"], doc.get("source_ts")))
-                db.execute("""
-                    UPDATE documents SET title=?, body_markdown=?, content_hash=?,
-                        version=?, metadata=?, source_ts=?, fetched_at=datetime('now'), sync_run_id=?
-                    WHERE id=?
-                """, (doc["title"], doc["body_markdown"], content_hash,
-                      new_version, doc.get("metadata", "{}"), doc.get("source_ts"), run_id, existing["id"]))
-                docs_updated += 1
-
-        # Deletion detection: remove docs no longer present in source
         docs_deleted = 0
-        if result.all_source_ids:
+        tot_fetched = 0
+        tot_item_rows = 0
+        tot_items_new = 0
+        tot_items_updated = 0
+        last_result = None
+        iteration = 0
+
+        item_count = db.execute(
+            "SELECT COUNT(*) as c FROM items WHERE service_id = ?", (service_id,)
+        ).fetchone()["c"]
+        fresh_start = item_count == 0
+
+        while True:
+            iteration += 1
+            if iteration > 10_000:
+                raise RuntimeError("Sync exceeded maximum pull iterations (possible puller bug)")
+
+            result = puller.pull(cursor=cursor_work, fresh_start=fresh_start)
+            fresh_start = False
+            last_result = result
+
+            for item in result.items:
+                item["service_id"] = service_id
+                item["sync_run_id"] = run_id
+                item.setdefault("thread_id", None)
+                db.execute("""
+                    INSERT INTO items (service_id, item_type, source_id, thread_id, conversation,
+                        sender, sender_is_me, recipients, subject, body_plain, body_html,
+                        attachments, labels, metadata, source_ts, sync_run_id)
+                    VALUES (:service_id, :item_type, :source_id, :thread_id, :conversation,
+                        :sender, :sender_is_me, :recipients, :subject, :body_plain, :body_html,
+                        :attachments, :labels, :metadata, :source_ts, :sync_run_id)
+                    ON CONFLICT(service_id, source_id) DO UPDATE SET
+                        thread_id=excluded.thread_id,
+                        body_plain=excluded.body_plain, body_html=excluded.body_html,
+                        subject=excluded.subject, labels=excluded.labels,
+                        metadata=excluded.metadata, source_ts=excluded.source_ts
+                """, item)
+
+            if result.documents:
+                log.info("Processing %d documents...", len(result.documents))
+
+            for doc in result.documents:
+                content_hash = hashlib.sha256(doc["body_markdown"].encode()).hexdigest()
+                existing = db.execute(
+                    "SELECT id, content_hash, version FROM documents WHERE service_id = ? AND source_id = ?",
+                    (service_id, doc["source_id"]),
+                ).fetchone()
+
+                if existing is None:
+                    db.execute("""
+                        INSERT INTO documents (service_id, source_id, title, body_markdown,
+                            content_hash, version, metadata, source_ts, sync_run_id)
+                        VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+                    """, (service_id, doc["source_id"], doc["title"], doc["body_markdown"],
+                          content_hash, doc.get("metadata", "{}"), doc.get("source_ts"), run_id))
+                    docs_new += 1
+                elif existing["content_hash"] != content_hash:
+                    log.info("Updated: %s (v%d → v%d)", doc["title"], existing["version"], existing["version"] + 1)
+                    new_version = existing["version"] + 1
+                    db.execute("""
+                        INSERT INTO document_versions (document_id, version, body_markdown, content_hash, source_ts)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (existing["id"], existing["version"],
+                          db.execute("SELECT body_markdown FROM documents WHERE id = ?", (existing["id"],)).fetchone()["body_markdown"],
+                          existing["content_hash"], doc.get("source_ts")))
+                    db.execute("""
+                        UPDATE documents SET title=?, body_markdown=?, content_hash=?,
+                            version=?, metadata=?, source_ts=?, fetched_at=datetime('now'), sync_run_id=?
+                        WHERE id=?
+                    """, (doc["title"], doc["body_markdown"], content_hash,
+                          new_version, doc.get("metadata", "{}"), doc.get("source_ts"), run_id, existing["id"]))
+                    docs_updated += 1
+
+            tot_fetched += len(result.items) + len(result.documents)
+            tot_item_rows += len(result.items)
+            tot_items_new += result.items_new
+            tot_items_updated += result.items_updated
+
+            cursor_work = result.new_cursor or cursor_work
+            now_partial = datetime.now(timezone.utc).isoformat()
+            db.execute(
+                "UPDATE services SET sync_cursor=?, updated_at=? WHERE id=?",
+                (cursor_work, now_partial, service_id),
+            )
+            db.execute(
+                """UPDATE sync_runs SET items_fetched=?, items_new=?, items_updated=?, cursor_after=?
+                   WHERE id=?""",
+                (tot_fetched, tot_items_new + docs_new, tot_items_updated + docs_updated, cursor_work, run_id),
+            )
+            db.commit()
+
+            if result.complete:
+                break
+
+        # Deletion detection: only when the final pull batch includes a full source-id snapshot
+        if last_result and last_result.complete and last_result.all_source_ids:
             existing_docs = db.execute(
                 "SELECT id, source_id, title FROM documents WHERE service_id = ?",
                 (service_id,),
             ).fetchall()
             for ed in existing_docs:
-                if ed["source_id"] not in result.all_source_ids:
+                if ed["source_id"] not in last_result.all_source_ids:
                     log.info("Removing deleted doc: %s (source_id=%s)", ed["title"], ed["source_id"][:12])
                     db.execute("DELETE FROM document_versions WHERE document_id = ?", (ed["id"],))
                     db.execute("DELETE FROM documents WHERE id = ?", (ed["id"],))
@@ -263,20 +303,20 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
 
         duration = (datetime.fromisoformat(now) - datetime.fromisoformat(started)).total_seconds()
 
-        total_fetched = len(result.items) + len(result.documents)
-        total_new = result.items_new + docs_new
-        total_updated = result.items_updated + docs_updated
+        total_fetched = tot_fetched
+        total_new = tot_items_new + docs_new
+        total_updated = tot_items_updated + docs_updated
 
         db.execute("""
             UPDATE sync_runs SET status='success', completed_at=?, items_fetched=?,
                 items_new=?, items_updated=?, cursor_after=?, duration_sec=?
             WHERE id=?
         """, (now, total_fetched, total_new, total_updated,
-              result.new_cursor, duration, run_id))
+              cursor_work, duration, run_id))
 
         db.execute(
             "UPDATE services SET last_sync_at=?, sync_cursor=?, updated_at=? WHERE id=?",
-            (now, result.new_cursor or cursor_before, now, service_id),
+            (now, cursor_work, now, service_id),
         )
         db.commit()
 
@@ -292,7 +332,7 @@ def run_sync(service_id: str, run_type: str = "manual") -> dict:
         except Exception as e:
             log.warning("Embedding indexing failed (non-fatal): %s", e)
 
-        return {"run_id": run_id, "status": "success", "items": len(result.items), "docs_deleted": docs_deleted}
+        return {"run_id": run_id, "status": "success", "items": tot_item_rows, "docs_deleted": docs_deleted}
 
     except Exception as e:
         log.error("Sync failed for %s: %s", service_id, e)

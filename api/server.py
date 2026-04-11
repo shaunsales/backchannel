@@ -1,14 +1,18 @@
 """FastAPI REST API server for Backchannel."""
+import hashlib
+import hmac
 import json
 import logging
 from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from api.db import get_db, init_db
 from api.services import manager
-from api.config import DATABASE_PATH
+from api.config import DATABASE_PATH, READ_API_KEY
 
 log = logging.getLogger(__name__)
 
@@ -16,7 +20,7 @@ app = FastAPI(title="Backchannel API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -516,6 +520,80 @@ def search(q: str = "", mode: str = "hybrid", limit: int = 20):
         r["time"] = _humanize_time(r.get("source_ts"))
 
     return {"results": results, "mode": mode, "total": len(results)}
+
+
+def read_api_key_auth(
+    authorization: Annotated[str | None, Header()] = None,
+) -> None:
+    """Bearer token must match READ_API_KEY (timing-safe compare on SHA-256 digests)."""
+    if not READ_API_KEY:
+        raise HTTPException(
+            status_code=404,
+            detail="Context API is not configured (set READ_API_KEY in .env).",
+        )
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization: Bearer <READ_API_KEY> required.",
+        )
+    token = authorization[7:].strip()
+    td = hashlib.sha256(token.encode()).digest()
+    kd = hashlib.sha256(READ_API_KEY.encode()).digest()
+    if not hmac.compare_digest(td, kd):
+        raise HTTPException(status_code=401, detail="Invalid API key.")
+
+
+class ContextBuildBody(BaseModel):
+    """Build capped markdown context from hybrid/semantic/keyword search for an external LLM."""
+
+    q: str = Field(..., min_length=1, description="Search query (same semantics as GET /api/search).")
+    mode: str = "hybrid"
+    limit: int = Field(15, ge=1, le=50)
+    max_context_chars: int = Field(48_000, ge=2000, le=200_000)
+    per_source_max_chars: int = Field(12_000, ge=500, le=100_000)
+    service_id: str | None = None
+    conversation_substring: str | None = None
+    thread_id: str | None = None
+    since: str | None = Field(
+        default=None,
+        description="ISO-8601 timestamp; only hits with source_ts >= since are kept.",
+    )
+
+    @field_validator("q")
+    @classmethod
+    def q_non_empty(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("q must not be empty")
+        return s
+
+
+@app.post("/api/context/build", dependencies=[Depends(read_api_key_auth)])
+def build_llm_context(body: ContextBuildBody):
+    """Return search hits as structured citations plus one markdown blob for OpenClaw / Claude.
+
+    Requires READ_API_KEY and header: Authorization: Bearer <READ_API_KEY>
+    """
+    from api import context_build as cb
+
+    if body.mode not in ("hybrid", "semantic", "keyword"):
+        raise HTTPException(400, "mode must be hybrid, semantic, or keyword")
+
+    try:
+        return cb.build_retrieval_context(
+            get_db(),
+            body.q,
+            mode=body.mode,
+            limit=body.limit,
+            max_context_chars=body.max_context_chars,
+            per_source_max_chars=body.per_source_max_chars,
+            service_id=body.service_id,
+            conversation_substring=body.conversation_substring,
+            thread_id=body.thread_id,
+            since=body.since,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 # ── Embeddings ─────────────────────────────────────────────────────────────

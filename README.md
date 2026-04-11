@@ -15,7 +15,7 @@ dashboard for account management, browsing, and monitoring.
   incremental sync by date)
 - **Vector Search** — fully integrated (sqlite-vec for database-native KNN,
   sentence-transformers for local embeddings, hybrid semantic + keyword search)
-- **ProtonMail, WhatsApp** — planned
+- **WhatsApp** — planned
 
 ## Quick Start
 
@@ -43,8 +43,8 @@ cp .env.example .env
 # Create data directories
 mkdir -p data/sessions data/tokens data/logs
 
-# Start the API server
-uvicorn api.server:app --port 8787 --reload
+# Start the API server (port matches api.config / .env — see below)
+uvicorn api.server:app --port "$(python -c 'from api.config import DASHBOARD_PORT; print(DASHBOARD_PORT)')" --reload
 ```
 
 ### 2. Frontend (React)
@@ -55,8 +55,14 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) in your browser.
-The frontend proxies `/api/*` requests to the backend on port 8787.
+Vite prints the local URL when it starts. The dev server picks a stable port from
+your checkout path (or `WEB_DEV_PORT` in `.env`) and proxies `/api/*` to the
+API port (`DASHBOARD_PORT` or the same path-based default). To see both ports
+without starting servers:
+
+```bash
+python -c "from api.config import DASHBOARD_PORT, WEB_DEV_PORT; print(f'API={DASHBOARD_PORT}  Web={WEB_DEV_PORT}')"
+```
 
 ## Pages
 
@@ -93,6 +99,9 @@ The frontend proxies `/api/*` requests to the backend on port 8787.
 2. In the dashboard, go to **Accounts** → **+ Add Account** → **Gmail** → enter your email and App Password.
 3. Click **Sync** to pull emails.
 
+**Large mailboxes:** Gmail uses the shared **UID + SINCE** batching in [`api/pullers/imap_uid_sync.py`](api/pullers/imap_uid_sync.py) (IMAPClient, oldest messages first within each search window). After each batch, the **cursor is committed** so a dropped connection can resume. On a **fresh account** (no stored items yet), the first import widens the lookback to `sync_days` capped at **20 years** (`MAX_SYNC_LOOKBACK_DAYS`). Optional service `config` JSON: `sync_days`, `max_messages` (total **UID slots** processed across batches toward a long backfill; `0` = unlimited), `imap_batch_size` (default **100**). These are **Backchannel limits**, not provider caps.
+
+
 ## Daily Sync
 
 Run all connected services headless:
@@ -104,9 +113,18 @@ python scripts/daily_sync.py
 
 Automate with `launchd` (macOS) or `cron`.
 
+### OpenClaw and other automations
+
+Set **`READ_API_KEY`** in `.env` to enable **`POST /api/context/build`**. Send header
+`Authorization: Bearer <READ_API_KEY>` and JSON body
+`{ "q": "…", "mode": "hybrid", "limit": 15, "service_id": null, … }`.
+The response includes **`context_markdown`** (capped text you can paste into a Claude
+Sonnet prompt in OpenClaw) plus **`citations`** for traceability. No Ollama or in-app
+LLM is involved — only your existing hybrid search and SQLite content.
+
 ## API Endpoints
 
-All return JSON. Backend runs on port 8787.
+All return JSON. Backend listens on `DASHBOARD_PORT` (see Quick Start).
 
 | Endpoint | Description |
 |---|---|
@@ -128,6 +146,7 @@ All return JSON. Backend runs on port 8787.
 | `GET /api/conversations/{name}` | Messages in a thread (`?service=`, `?thread_id=`) |
 | `GET /api/messages` | Flat message list (`?q=`, `?service=`, `?limit=`) |
 | `GET /api/search` | Unified search (`?q=`, `?mode=semantic|keyword|hybrid`, `?limit=`) |
+| `POST /api/context/build` | Retrieval-only markdown for an external LLM (requires `READ_API_KEY`; see below) |
 | `POST /api/embeddings/backfill` | Index all un-embedded items and documents |
 | `GET /api/embeddings/stats` | Embedding index coverage statistics |
 | `GET /api/history` | Sync run history (`?limit=`) |
@@ -138,17 +157,19 @@ All return JSON. Backend runs on port 8787.
 
 ```
 api/
-  server.py            FastAPI REST API (port 8787)
+  server.py            FastAPI REST API (`DASHBOARD_PORT` / path-derived default)
   config.py            Environment variables
   db.py                SQLite schema, init, sqlite-vec extension loading
   content.py           Content processing pipeline (HTML→markdown, filtering, truncation)
   embeddings.py        Vector embeddings: chunking, indexing, semantic/hybrid search
+  context_build.py     Assemble capped markdown context for external LLMs (OpenClaw)
   logstream.py         Real-time log broadcasting
   pullers/             Data pull engines
     base.py            BasePuller ABC and PullResult dataclass
     notion.py          Notion page sync (recursive block→markdown)
     telegram.py        Telegram message sync (Telethon, multi-step auth)
     gmail.py           Gmail IMAP sync (App Password, thread grouping)
+    imap_uid_sync.py   Shared UID + SINCE incremental IMAP helpers
   services/
     manager.py         Service lifecycle (connect, sync, disconnect, CRUD)
 web/
@@ -202,7 +223,6 @@ data/
 - **Notion**: `notion-client` Python SDK (API key auth)
 - **Telegram**: `telethon` (multi-step phone/code auth, rate limiting)
 - **Gmail**: `imaplib` (App Password auth, IMAP with X-GM-THRID thread grouping)
-- **ProtonMail**: `imapclient` + `mail-parser` (planned, via Proton Bridge IMAP)
 - **WhatsApp**: Go bridge binary on `whatsmeow` (planned)
 
 ## Environment Variables
@@ -212,7 +232,8 @@ web UI and stored in the database — not in `.env`.
 
 | Variable | Description |
 |---|---|
-| `DASHBOARD_PORT` | API port (default: `8787`) |
+| `DASHBOARD_PORT` | API port (optional; if unset, derived from the project folder path) |
+| `WEB_DEV_PORT` | Vite dev server port (optional; same path-based default when unset) |
 | `DATABASE_PATH` | SQLite file path (default: `data/backchannel.db`) |
 | `USER_EMAIL` | Your email (for sender_is_me detection) |
 | `EMBEDDING_MODEL` | Sentence-transformers model (default: `all-MiniLM-L6-v2`) |

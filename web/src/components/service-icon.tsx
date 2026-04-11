@@ -22,14 +22,6 @@ function GmailIcon({ className }: { className?: string }) {
   );
 }
 
-function ProtonMailIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2L2 7v6.5c0 5.25 4.25 10.13 10 11.5 5.75-1.37 10-6.25 10-11.5V7L12 2zm0 2.18L20 8.27v5.23c0 4.12-3.37 8-8 9.27-4.63-1.27-8-5.15-8-9.27V8.27L12 4.18zM8 10v2h8v-2H8zm0 4v2h8v-2H8z" />
-    </svg>
-  );
-}
-
 function WhatsAppIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -51,7 +43,6 @@ const SERVICE_ICONS: Record<string, React.FC<{ className?: string }>> = {
   notion: NotionIcon,
   telegram: TelegramIcon,
   gmail: GmailIcon,
-  protonmail: ProtonMailIcon,
   whatsapp: WhatsAppIcon,
 };
 

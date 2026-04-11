@@ -19,7 +19,7 @@ class NotionPuller(BasePuller):
         resp = client.search(query="", page_size=1)
         return "results" in resp
 
-    def pull(self, cursor: str | None = None, since: str | None = None) -> PullResult:
+    def pull(self, cursor: str | None = None, since: str | None = None, *, fresh_start: bool = False) -> PullResult:
         client = self._client()
         max_depth = self.config.get("max_depth", 5)
         documents = []

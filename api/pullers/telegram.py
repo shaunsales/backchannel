@@ -252,7 +252,7 @@ class TelegramPuller(BasePuller):
         finally:
             await client.disconnect()
 
-    def pull(self, cursor: str | None = None, since: str | None = None) -> PullResult:
+    def pull(self, cursor: str | None = None, since: str | None = None, *, fresh_start: bool = False) -> PullResult:
         return _run_async(self._pull_async(cursor, since))
 
     async def _pull_async(self, cursor: str | None, since: str | None) -> PullResult:

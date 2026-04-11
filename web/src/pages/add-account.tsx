@@ -18,7 +18,6 @@ const SERVICES = [
   { key: "notion", name: "Notion", desc: "Sync pages and databases" },
   { key: "telegram", name: "Telegram", desc: "Sync messages from chats" },
   { key: "gmail", name: "Gmail", desc: "Sync emails via IMAP" },
-  { key: "protonmail", name: "ProtonMail", desc: "Sync emails via IMAP bridge" },
   { key: "whatsapp", name: "WhatsApp", desc: "Sync messages via bridge" },
 ];
 

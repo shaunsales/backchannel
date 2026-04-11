@@ -12,6 +12,9 @@ class PullResult:
     docs_new: int = 0
     docs_updated: int = 0
     all_source_ids: set = field(default_factory=set)  # for deletion detection on full syncs
+    # When False, the service manager should call pull() again with new_cursor before finishing
+    # the sync run (committing items + sync_cursor after each batch for crash-safe IMAP backfill).
+    complete: bool = True
 
 
 class BasePuller(ABC):
@@ -28,7 +31,13 @@ class BasePuller(ABC):
         ...
 
     @abstractmethod
-    def pull(self, cursor: str | None = None, since: str | None = None) -> PullResult:
+    def pull(
+        self,
+        cursor: str | None = None,
+        since: str | None = None,
+        *,
+        fresh_start: bool = False,
+    ) -> PullResult:
         """Fetch items from the service. Use cursor/since for incremental pulls."""
         ...
 

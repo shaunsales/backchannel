@@ -13,12 +13,12 @@ Local-first daily data sync app: Python API + React dashboard over a shared SQLi
 
 ```bash
 source .venv/bin/activate
-uvicorn api.server:app --port 8787 --reload
+uvicorn api.server:app --port "$(python -c 'from api.config import DASHBOARD_PORT; print(DASHBOARD_PORT)')" --reload
 ```
 
 - Virtual env lives at `.venv/` in the project root
 - `--reload` enables auto-restart on file changes (built into Uvicorn)
-- API serves on http://localhost:8787
+- API port: `DASHBOARD_PORT` in root `.env`, or a stable default from the checkout path (`api/config.py`)
 
 ### Frontend (React)
 
@@ -26,8 +26,8 @@ uvicorn api.server:app --port 8787 --reload
 cd web && npm run dev
 ```
 
-- Vite dev server on http://localhost:5173 with HMR
-- Proxies `/api/*` → `http://localhost:8787` (configured in `vite.config.ts`)
+- Vite dev server port: `WEB_DEV_PORT` in root `.env`, or path-derived default (`web/vite.config.ts`)
+- HMR enabled; proxies `/api/*` to `http://127.0.0.1:<DASHBOARD_PORT>` (same path-based rules as the API)
 
 ## Project Structure
 
@@ -68,7 +68,7 @@ data/
 ## Key Architecture Decisions
 
 - All service credentials stored in the SQLite DB, not in `.env`
-- `.env` only holds `DATABASE_PATH`, `DASHBOARD_PORT`, `USER_EMAIL`
+- `.env` holds `DATABASE_PATH`, optional `DASHBOARD_PORT` / `WEB_DEV_PORT`, `USER_EMAIL`
 - Dependencies: `requirements.txt` (Python), `web/package.json` (JS)
 - No ORM — raw SQL with `sqlite3.Row` for dict-like access
 - Thread-local DB connections with WAL + foreign keys enabled

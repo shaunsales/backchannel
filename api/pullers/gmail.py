@@ -5,8 +5,11 @@ import email
 import email.message
 import email.utils
 import email.header
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
+from imapclient import IMAPClient
+
+from api.pullers import imap_uid_sync as ius
 from api.pullers.base import BasePuller, PullResult
 from api.content import process_content
 
@@ -16,7 +19,7 @@ GMAIL_IMAP_HOST = "imap.gmail.com"
 GMAIL_IMAP_PORT = 993
 
 DEFAULT_SYNC_DAYS = 365
-DEFAULT_MAX_MESSAGES = 100
+ALL_MAIL = "[Gmail]/All Mail"
 
 
 def _imap_connect(email_addr: str, app_password: str) -> imaplib.IMAP4_SSL:
@@ -123,6 +126,38 @@ def _parse_date(msg: email.message.Message) -> str | None:
         return parsed.isoformat()
     except Exception:
         return None
+
+
+def _gmail_fetch_uid_batch_imapclient(
+    client: IMAPClient,
+    uids: list[int],
+    my_email: str,
+    normalize_fn,
+) -> list[dict]:
+    if not uids:
+        return []
+    client.select_folder(ALL_MAIL, readonly=True)
+    resp = client.fetch(uids, ["RFC822", "X-GM-THRID"])
+    items: list[dict] = []
+    for uid, data in resp.items():
+        try:
+            raw = data.get(b"RFC822")
+            if not raw:
+                continue
+            thr = data.get(b"X-GM-THRID")
+            if thr is None:
+                gmail_thread_id = None
+            elif isinstance(thr, bytes):
+                gmail_thread_id = thr.decode("ascii", errors="replace").strip()
+            else:
+                gmail_thread_id = str(thr).strip()
+            msg = email.message_from_bytes(raw)
+            item = normalize_fn(msg, my_email, gmail_thread_id or None)
+            if item:
+                items.append(item)
+        except Exception as e:
+            log.warning("Gmail IMAP: failed to process UID %s: %s", uid, e)
+    return items
 
 
 class GmailPuller(BasePuller):
@@ -235,90 +270,186 @@ class GmailPuller(BasePuller):
             except Exception:
                 pass
 
-    def pull(self, cursor: str | None = None, since: str | None = None) -> PullResult:
+    def pull(self, cursor: str | None = None, since: str | None = None, *, fresh_start: bool = False) -> PullResult:
+        """UID-based batch pull (IMAPClient) with shared cursor format (v4).
+
+        Oldest mail first (lowest UID in each search window). ``fresh_start`` is set
+        by the service manager when this account has no stored items yet, widening
+        the initial lookback (capped at ~20 years in ``imap_uid_sync``).
+
+        Returns ``complete=False`` when more batches remain; the manager commits
+        ``new_cursor`` after each batch.
+        """
         my_email = self.credentials.get("email", "").lower()
-        max_messages = self.config.get("max_messages", DEFAULT_MAX_MESSAGES)
-        conn = self._connect()
+        batch_size = ius.imap_batch_size(self.config)
+        max_total = ius.max_messages_cap(self.config)
 
+        state = ius.parse_single_mailbox_cursor(
+            cursor,
+            config=self.config,
+            fresh_start=fresh_start,
+            default_days_when_not_fresh=DEFAULT_SYNC_DAYS,
+        )
+        if since:
+            cutoff = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.replace(tzinfo=timezone.utc)
+            state = ius.new_single_mailbox_backfill_state(cutoff=cutoff, uidvalidity=None)
+
+        if not state.get("imap_since") and state.get("since_iso"):
+            try:
+                dt = datetime.fromisoformat(str(state["since_iso"]).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                state["imap_since"] = ius.imap_since_from_datetime(dt)
+            except ValueError:
+                state["imap_since"] = ius.imap_since_from_datetime(datetime.now(timezone.utc))
+
+        email_addr = self.credentials.get("email", "")
+        app_password = self.credentials.get("app_password", "")
+        client = ius.gmail_imap_client(email_addr, app_password)
         try:
-            conn.select("[Gmail]/All Mail", readonly=True)
+            validity = ius.folder_uidvalidity(client, ALL_MAIL)
+            if validity is not None:
+                stored = state.get("uidvalidity")
+                if stored is not None and int(stored) != validity:
+                    log.warning(
+                        "Gmail IMAP: UIDVALIDITY changed (%s → %s); resetting UID cursor",
+                        stored,
+                        validity,
+                    )
+                    state["last_uid"] = 0
+                state["uidvalidity"] = validity
 
-            # Determine date cutoff
-            if since:
-                cutoff = datetime.fromisoformat(since)
-            elif cursor:
-                cutoff = datetime.fromisoformat(cursor)
-            else:
-                days = self.config.get("sync_days", DEFAULT_SYNC_DAYS)
-                cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            imap_since = state.get("imap_since") or ius.imap_since_from_datetime(
+                datetime.fromisoformat(str(state["since_iso"]).replace("Z", "+00:00"))
+            )
+            last_uid = int(state.get("last_uid") or 0)
+            fetched_total = int(state.get("fetched_total") or 0)
+            phase = state.get("phase") or "backfill"
 
-            # IMAP date search (format: DD-Mon-YYYY)
-            imap_date = cutoff.strftime("%d-%b-%Y")
-            log.info("Gmail IMAP sync starting (since=%s, max=%d)", imap_date, max_messages)
+            if max_total is not None and fetched_total >= max_total:
+                log.info("Gmail IMAP: reached max_messages cap (%s), finishing sync run", max_total)
+                now = datetime.now(timezone.utc)
+                live = ius.new_single_mailbox_live_state(when=now, uidvalidity=validity)
+                return PullResult(
+                    items=[],
+                    new_cursor=ius.dump_cursor(live),
+                    items_new=0,
+                    complete=True,
+                )
 
-            status, data = conn.search(None, f'(SINCE {imap_date})')
-            if status != "OK":
-                raise ValueError(f"IMAP search failed: {status}")
+            uids = ius.uid_search_uids_ascending(client, ALL_MAIL, imap_since, last_uid)
+            if not uids:
+                if phase == "backfill":
+                    now = datetime.now(timezone.utc)
+                    live = ius.new_single_mailbox_live_state(when=now, uidvalidity=validity)
+                    log.info("Gmail IMAP: backfill complete for SINCE %s → switching to live cursor", imap_since)
+                    return PullResult(
+                        items=[],
+                        new_cursor=ius.dump_cursor(live),
+                        items_new=0,
+                        complete=True,
+                    )
+                now = datetime.now(timezone.utc)
+                live = ius.new_single_mailbox_live_state(when=now, uidvalidity=validity)
+                log.info("Gmail IMAP: live batch empty (since %s)", imap_since)
+                return PullResult(
+                    items=[],
+                    new_cursor=ius.dump_cursor(live),
+                    items_new=0,
+                    complete=True,
+                )
 
-            msg_nums = data[0].split()
-            log.info("Gmail IMAP: %d messages since %s", len(msg_nums), imap_date)
+            remaining_cap = None
+            if max_total is not None:
+                remaining_cap = max_total - fetched_total
+                if remaining_cap <= 0:
+                    now = datetime.now(timezone.utc)
+                    live = ius.new_single_mailbox_live_state(when=now, uidvalidity=validity)
+                    return PullResult(items=[], new_cursor=ius.dump_cursor(live), items_new=0, complete=True)
 
-            # Cap to configured max (take most recent)
-            if len(msg_nums) > max_messages:
-                log.info("Gmail IMAP: capping to %d most recent messages", max_messages)
-                msg_nums = msg_nums[-max_messages:]
+            take = min(batch_size, len(uids))
+            if remaining_cap is not None:
+                take = min(take, remaining_cap)
+            batch_uids = uids[:take]
 
-            items = []
-            for i, num in enumerate(msg_nums):
-                try:
-                    # Fetch RFC822 body + Gmail thread ID via X-GM-THRID extension
-                    status, msg_data = conn.fetch(num, "(X-GM-THRID RFC822)")
-                    if status != "OK" or not msg_data or not msg_data[0]:
-                        continue
+            log.info(
+                "Gmail IMAP: %s phase batch uid %s..%s (%d/%d in window, fetched_total=%d, oldest-first)",
+                phase,
+                batch_uids[0],
+                batch_uids[-1],
+                take,
+                len(uids),
+                fetched_total,
+            )
 
-                    # Parse X-GM-THRID from the response
-                    gmail_thread_id = None
-                    raw_email = None
-                    for part in msg_data:
-                        if isinstance(part, tuple):
-                            header = part[0]
-                            if isinstance(header, bytes):
-                                header = header.decode("utf-8", errors="replace")
-                            # Extract X-GM-THRID value from IMAP response
-                            if "X-GM-THRID" in header:
-                                import re
-                                thrid_match = re.search(r'X-GM-THRID\s+(\d+)', header)
-                                if thrid_match:
-                                    gmail_thread_id = thrid_match.group(1)
-                            raw_email = part[1]
+            items = _gmail_fetch_uid_batch_imapclient(client, batch_uids, my_email, self.normalize)
+            new_last_uid = max(batch_uids)
+            fetched_total += len(batch_uids)
 
-                    if raw_email is None:
-                        continue
+            more_in_window = len(uids) > take
+            hit_cap = max_total is not None and fetched_total >= max_total
 
-                    msg = email.message_from_bytes(raw_email)
-                    item = self.normalize(msg, my_email, gmail_thread_id)
-                    if item:
-                        items.append(item)
+            if hit_cap and more_in_window:
+                state["phase"] = phase
+                state["imap_since"] = imap_since
+                state.setdefault("since_iso", datetime.now(timezone.utc).isoformat())
+                state["last_uid"] = new_last_uid
+                state["uidvalidity"] = validity
+                state["fetched_total"] = fetched_total
+                log.info(
+                    "Gmail IMAP: max_messages cap reached (%s); saving cursor for next sync",
+                    max_total,
+                )
+                return PullResult(
+                    items=items,
+                    new_cursor=ius.dump_cursor(state),
+                    items_new=len(items),
+                    complete=True,
+                )
 
-                    if (i + 1) % 50 == 0:
-                        log.info("Gmail IMAP: processed %d/%d messages", i + 1, len(msg_nums))
-                except Exception as e:
-                    log.warning("Gmail IMAP: failed to process message %s: %s", num, e)
+            if more_in_window and not hit_cap:
+                state["phase"] = phase
+                state["imap_since"] = imap_since
+                state.setdefault("since_iso", datetime.now(timezone.utc).isoformat())
+                state["last_uid"] = new_last_uid
+                state["uidvalidity"] = validity
+                state["fetched_total"] = fetched_total
+                return PullResult(
+                    items=items,
+                    new_cursor=ius.dump_cursor(state),
+                    items_new=len(items),
+                    complete=False,
+                )
 
-            # Cursor: ISO timestamp of now (next sync will use SINCE this date)
-            new_cursor = datetime.now(timezone.utc).isoformat()
+            if phase == "backfill" and not more_in_window:
+                now = datetime.now(timezone.utc)
+                live = ius.new_single_mailbox_live_state(when=now, uidvalidity=validity)
+                log.info(
+                    "Gmail IMAP: backfill finished (%d msgs this batch, %d UIDs counted); live cursor set",
+                    len(items),
+                    fetched_total,
+                )
+                return PullResult(
+                    items=items,
+                    new_cursor=ius.dump_cursor(live),
+                    items_new=len(items),
+                    complete=True,
+                )
 
-            log.info("Gmail IMAP sync complete: %d items from %d messages",
-                     len(items), len(msg_nums))
-
+            now = datetime.now(timezone.utc)
+            live = ius.new_single_mailbox_live_state(when=now, uidvalidity=validity)
+            log.info("Gmail IMAP: live window drained (%d items this batch)", len(items))
             return PullResult(
                 items=items,
-                new_cursor=new_cursor,
+                new_cursor=ius.dump_cursor(live),
                 items_new=len(items),
+                complete=True,
             )
         finally:
             try:
-                conn.logout()
+                client.logout()
             except Exception:
                 pass
 
